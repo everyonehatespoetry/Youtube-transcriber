@@ -8,9 +8,17 @@ import tempfile
 import shutil
 
 # Add the project root to the path so we can import yt2txt modules
-sys.path.insert(0, str(Path(__file__).parent))
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+# Load .env file from project root (before importing Config)
+from dotenv import load_dotenv
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(env_path, override=False)
 
 # Load API key from Streamlit secrets (for cloud deployment) or environment
+# Streamlit secrets take precedence over .env file
 if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
     os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
     if 'MODEL' in st.secrets:
