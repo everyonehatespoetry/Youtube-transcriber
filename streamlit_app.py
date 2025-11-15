@@ -82,8 +82,10 @@ if 'processing' not in st.session_state:
 def process_video_streamlit(url: str, extract_slides: bool, analyze: bool):
     """Process video with Streamlit progress indicators."""
     try:
-        # Validate configuration
-        Config.validate()
+        # Validate configuration first
+        with st.spinner("Validating configuration..."):
+            Config.validate()
+            st.success("✓ Configuration validated")
         
         # Create temporary output directory
         temp_dir = Path(tempfile.mkdtemp())
@@ -200,64 +202,74 @@ def main():
             if not url:
                 st.error("Please enter a YouTube URL")
             else:
-                st.session_state.processing = True
-                success, output_dir = process_video_streamlit(url, extract_slides, analyze)
-                st.session_state.processing = False
+                # Show immediate feedback
+                status_container = st.container()
+                with status_container:
+                    st.info("🔄 Starting video processing... Please wait.")
                 
-                if success:
-                    st.success("✅ Video processed successfully!")
+                st.session_state.processing = True
+                try:
+                    success, output_dir = process_video_streamlit(url, extract_slides, analyze)
+                    st.session_state.processing = False
                     
-                    # Show download options
-                    st.subheader("📥 Download Files")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        with open(output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
-                            st.download_button(
-                                "📄 Download TXT",
-                                f.read(),
-                                file_name="transcript.txt",
-                                mime="text/plain"
+                    if success:
+                        st.success("✅ Video processed successfully!")
+                        
+                        # Show download options
+                        st.subheader("📥 Download Files")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            with open(output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
+                                st.download_button(
+                                    "📄 Download TXT",
+                                    f.read(),
+                                    file_name="transcript.txt",
+                                    mime="text/plain"
+                                )
+                        
+                        with col2:
+                            with open(output_dir / "transcript.json", "r", encoding="utf-8") as f:
+                                st.download_button(
+                                    "📋 Download JSON",
+                                    f.read(),
+                                    file_name="transcript.json",
+                                    mime="application/json"
+                                )
+                        
+                        with col3:
+                            with open(output_dir / "transcript.srt", "r", encoding="utf-8") as f:
+                                st.download_button(
+                                    "🎬 Download SRT",
+                                    f.read(),
+                                    file_name="transcript.srt",
+                                    mime="text/plain"
+                                )
+                        
+                        if st.session_state.analysis_text:
+                            with col4:
+                                st.download_button(
+                                    "📊 Download Analysis",
+                                    st.session_state.analysis_text,
+                                    file_name="equity_analysis.txt",
+                                    mime="text/plain"
+                                )
+                        
+                        # Show transcript preview
+                        if st.session_state.transcript:
+                            st.subheader("📝 Transcript Preview")
+                            transcript_text = "\n".join(
+                                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
+                                for seg in st.session_state.transcript.segments[:20]
                             )
-                    
-                    with col2:
-                        with open(output_dir / "transcript.json", "r", encoding="utf-8") as f:
-                            st.download_button(
-                                "📋 Download JSON",
-                                f.read(),
-                                file_name="transcript.json",
-                                mime="application/json"
-                            )
-                    
-                    with col3:
-                        with open(output_dir / "transcript.srt", "r", encoding="utf-8") as f:
-                            st.download_button(
-                                "🎬 Download SRT",
-                                f.read(),
-                                file_name="transcript.srt",
-                                mime="text/plain"
-                            )
-                    
-                    if st.session_state.analysis_text:
-                        with col4:
-                            st.download_button(
-                                "📊 Download Analysis",
-                                st.session_state.analysis_text,
-                                file_name="equity_analysis.txt",
-                                mime="text/plain"
-                            )
-                    
-                    # Show transcript preview
-                    if st.session_state.transcript:
-                        st.subheader("📝 Transcript Preview")
-                        transcript_text = "\n".join(
-                            f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
-                            for seg in st.session_state.transcript.segments[:20]
-                        )
-                        if len(st.session_state.transcript.segments) > 20:
-                            transcript_text += f"\n\n... and {len(st.session_state.transcript.segments) - 20} more segments"
-                        st.text_area("", transcript_text, height=300, disabled=True)
+                            if len(st.session_state.transcript.segments) > 20:
+                                transcript_text += f"\n\n... and {len(st.session_state.transcript.segments) - 20} more segments"
+                            st.text_area("", transcript_text, height=300, disabled=True)
+                except Exception as e:
+                    st.session_state.processing = False
+                    st.error(f"❌ Error: {str(e)}")
+                    st.exception(e)  # Show full error traceback for debugging
     
     # Tab 2: Chat
     with tab2:
