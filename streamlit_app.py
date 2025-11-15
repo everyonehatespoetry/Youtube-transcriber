@@ -28,7 +28,6 @@ from yt2txt.video_downloader import download_video
 from yt2txt.transcriber import transcribe_audio
 from yt2txt.analyzer import analyze_transcript
 from yt2txt.chat import start_chat_session
-from yt2txt.slide_extractor import SlideExtractor
 from yt2txt.writers.txt_writer import write_txt
 from yt2txt.writers.json_writer import write_json
 from yt2txt.writers.srt_writer import write_srt
@@ -105,6 +104,13 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool):
             if extract_slides:
                 with st.spinner("Extracting slides from video..."):
                     try:
+                        # Import SlideExtractor only when needed (avoids cv2 import issues on Streamlit Cloud)
+                        try:
+                            from yt2txt.slide_extractor import SlideExtractor
+                        except ImportError as e:
+                            st.error(f"Slide extraction is not available: {str(e)}. This feature requires OpenCV which may not be available on this platform.")
+                            return True, output_dir
+                        
                         video_path, _, _ = download_video(url, force=False)
                         extractor = SlideExtractor()
                         slides = extractor.process_video(video_path, output_dir, interval_seconds=1.0)
