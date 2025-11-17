@@ -40,25 +40,32 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Load API key from Streamlit secrets (for cloud deployment) - AFTER page config
-# Streamlit secrets take precedence over .env file
-try:
-    if hasattr(st, 'secrets') and st.secrets:
-        if 'OPENAI_API_KEY' in st.secrets:
-            os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
-        if 'MODEL' in st.secrets:
-            os.environ['MODEL'] = st.secrets['MODEL']
-        if 'ANALYSIS_MODEL' in st.secrets:
-            os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
-        if 'OUT_DIR' in st.secrets:
-            os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
-        if 'MAX_RETRIES' in st.secrets:
-            os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
-        # Reload Config after setting environment variables
-        Config._reload_from_env()
-except (AttributeError, TypeError, KeyError):
-    # st.secrets not available or key not found - will use .env file
-    pass
+# Load secrets into environment variables AFTER page config (when st.secrets is safe to access)
+# This must happen before Config is used, but after Streamlit initializes
+def _load_secrets_to_env():
+    """Load Streamlit secrets into environment variables."""
+    try:
+        if hasattr(st, 'secrets') and st.secrets:
+            if 'OPENAI_API_KEY' in st.secrets:
+                os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+            if 'MODEL' in st.secrets:
+                os.environ['MODEL'] = st.secrets['MODEL']
+            if 'ANALYSIS_MODEL' in st.secrets:
+                os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
+            if 'OUT_DIR' in st.secrets:
+                os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
+            if 'MAX_RETRIES' in st.secrets:
+                os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
+            # Reload Config values
+            Config.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+            Config.MODEL = os.getenv("MODEL", "whisper-1")
+            Config.ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-4o-mini")
+            Config.MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
+            Config.OUT_DIR = Path(os.getenv("OUT_DIR", "./out")).resolve()
+    except:
+        pass
+
+_load_secrets_to_env()
 
 # Custom CSS for better styling
 st.markdown("""
