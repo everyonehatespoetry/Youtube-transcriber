@@ -35,35 +35,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Load secrets from Streamlit Cloud and update Config
-# This happens AFTER page config when st.secrets is safe to access
-# Wrap in function to avoid any issues with top-level execution
-def load_streamlit_secrets():
-    """Load secrets from Streamlit Cloud into Config."""
-    try:
-        # Check if secrets are available
-        if not hasattr(st, 'secrets'):
-            return
-        if not st.secrets:
-            return
-        
-        # Update Config attributes directly (safer than env vars)
-        if 'OPENAI_API_KEY' in st.secrets:
-            Config.OPENAI_API_KEY = st.secrets['OPENAI_API_KEY']
-        if 'MODEL' in st.secrets:
-            Config.MODEL = st.secrets['MODEL']
-        if 'ANALYSIS_MODEL' in st.secrets:
-            Config.ANALYSIS_MODEL = st.secrets['ANALYSIS_MODEL']
-        if 'OUT_DIR' in st.secrets:
-            Config.OUT_DIR = Path(st.secrets['OUT_DIR']).resolve()
-        if 'MAX_RETRIES' in st.secrets:
-            Config.MAX_RETRIES = int(st.secrets['MAX_RETRIES'])
-    except (AttributeError, TypeError, KeyError, ValueError):
-        # Silently fail - will use .env file values
-        pass
-
-# Call the function to load secrets
-load_streamlit_secrets()
+# TEMPORARILY DISABLED: Secrets loading to test if app loads
+# If app loads without this, we know secrets access is the issue
+# def load_streamlit_secrets():
+#     """Load secrets from Streamlit Cloud into Config."""
+#     try:
+#         if not hasattr(st, 'secrets'):
+#             return
+#         if not st.secrets:
+#             return
+#         if 'OPENAI_API_KEY' in st.secrets:
+#             Config.OPENAI_API_KEY = st.secrets['OPENAI_API_KEY']
+#         if 'MODEL' in st.secrets:
+#             Config.MODEL = st.secrets['MODEL']
+#         if 'ANALYSIS_MODEL' in st.secrets:
+#             Config.ANALYSIS_MODEL = st.secrets['ANALYSIS_MODEL']
+#         if 'OUT_DIR' in st.secrets:
+#             Config.OUT_DIR = Path(st.secrets['OUT_DIR']).resolve()
+#         if 'MAX_RETRIES' in st.secrets:
+#             Config.MAX_RETRIES = int(st.secrets['MAX_RETRIES'])
+#     except:
+#         pass
+# load_streamlit_secrets()
 
 # Custom CSS for better styling
 st.markdown("""
