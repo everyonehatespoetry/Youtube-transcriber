@@ -39,7 +39,6 @@ from yt2txt.downloader import download_audio
 from yt2txt.video_downloader import download_video
 from yt2txt.transcriber import transcribe_audio
 from yt2txt.analyzer import analyze_transcript
-from yt2txt.chat import start_chat_session
 from yt2txt.writers.txt_writer import write_txt
 from yt2txt.writers.json_writer import write_json
 from yt2txt.writers.srt_writer import write_srt
