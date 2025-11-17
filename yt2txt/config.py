@@ -8,31 +8,24 @@ from dotenv import load_dotenv
 load_dotenv(override=False)
 
 
-class _ConfigMeta(type):
-    """Metaclass to make Config attributes read dynamically from environment."""
-    def __getattr__(cls, name: str):
-        # Only intercept specific config attributes when they don't exist as class attributes
-        if name == "OPENAI_API_KEY":
-            return os.getenv("OPENAI_API_KEY", "")
-        elif name == "MODEL":
-            return os.getenv("MODEL", "whisper-1")
-        elif name == "ANALYSIS_MODEL":
-            return os.getenv("ANALYSIS_MODEL", "gpt-4o-mini")
-        elif name == "MAX_RETRIES":
-            return int(os.getenv("MAX_RETRIES", "2"))
-        elif name == "OUT_DIR":
-            return Path(os.getenv("OUT_DIR", "./out")).resolve()
-        raise AttributeError(f"'{cls.__name__}' object has no attribute '{name}'")
-
-
-class Config(metaclass=_ConfigMeta):
+class Config:
     """Application configuration."""
+    
+    # OpenAI API settings - read from environment
+    # Note: These read from os.getenv() which will get the value set by streamlit_app.py
+    # before this module is imported, or from .env file, or from Streamlit secrets
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    MODEL: str = os.getenv("MODEL", "whisper-1")
+    ANALYSIS_MODEL: str = os.getenv("ANALYSIS_MODEL", "gpt-4o-mini")
+    MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
+    
+    # Output settings
+    OUT_DIR: Path = Path(os.getenv("OUT_DIR", "./out")).resolve()
     
     @classmethod
     def validate(cls) -> None:
         """Validate that required configuration is present."""
-        api_key = cls.OPENAI_API_KEY
-        if not api_key:
+        if not cls.OPENAI_API_KEY:
             raise ValueError(
                 "OPENAI_API_KEY is required. Please set it in your .env file or environment variables."
             )
