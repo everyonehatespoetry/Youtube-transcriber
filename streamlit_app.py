@@ -11,14 +11,9 @@ import shutil
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# Load .env file from project root (for local development)
+# Load .env file (for local development)
 from dotenv import load_dotenv
-env_path = project_root / '.env'
-if env_path.exists():
-    load_dotenv(env_path, override=False)
-else:
-    # Try loading from current directory
-    load_dotenv(override=False)
+load_dotenv()
 
 from yt2txt.config import Config
 from yt2txt.downloader import download_audio
@@ -40,32 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Load secrets into environment variables AFTER page config (when st.secrets is safe to access)
-# This must happen before Config is used, but after Streamlit initializes
-def _load_secrets_to_env():
-    """Load Streamlit secrets into environment variables."""
-    try:
-        if hasattr(st, 'secrets') and st.secrets:
-            if 'OPENAI_API_KEY' in st.secrets:
-                os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
-            if 'MODEL' in st.secrets:
-                os.environ['MODEL'] = st.secrets['MODEL']
-            if 'ANALYSIS_MODEL' in st.secrets:
-                os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
-            if 'OUT_DIR' in st.secrets:
-                os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
-            if 'MAX_RETRIES' in st.secrets:
-                os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
-            # Reload Config values
-            Config.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-            Config.MODEL = os.getenv("MODEL", "whisper-1")
-            Config.ANALYSIS_MODEL = os.getenv("ANALYSIS_MODEL", "gpt-4o-mini")
-            Config.MAX_RETRIES = int(os.getenv("MAX_RETRIES", "2"))
-            Config.OUT_DIR = Path(os.getenv("OUT_DIR", "./out")).resolve()
-    except:
-        pass
-
-_load_secrets_to_env()
+# Note: For Streamlit Cloud, secrets are accessed via st.secrets directly in code when needed
+# We don't convert them to env vars here to avoid any startup issues
 
 # Custom CSS for better styling
 st.markdown("""
