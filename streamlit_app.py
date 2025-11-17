@@ -11,28 +11,14 @@ import shutil
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# Load .env file from project root (before importing Config)
+# Load .env file from project root (for local development)
 from dotenv import load_dotenv
 env_path = project_root / '.env'
 if env_path.exists():
     load_dotenv(env_path, override=False)
-
-# Load API key from Streamlit secrets (for cloud deployment) or environment
-# Streamlit secrets take precedence over .env file
-try:
-    if hasattr(st, 'secrets') and st.secrets and 'OPENAI_API_KEY' in st.secrets:
-        os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
-        if 'MODEL' in st.secrets:
-            os.environ['MODEL'] = st.secrets['MODEL']
-        if 'ANALYSIS_MODEL' in st.secrets:
-            os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
-        if 'OUT_DIR' in st.secrets:
-            os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
-        if 'MAX_RETRIES' in st.secrets:
-            os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
-except Exception:
-    # If secrets access fails, continue - will use .env file or fail later with clear error
-    pass
+else:
+    # Try loading from current directory
+    load_dotenv(override=False)
 
 from yt2txt.config import Config
 from yt2txt.downloader import download_audio
@@ -53,6 +39,26 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Load API key from Streamlit secrets (for cloud deployment) - AFTER page config
+# Streamlit secrets take precedence over .env file
+try:
+    if hasattr(st, 'secrets') and st.secrets:
+        if 'OPENAI_API_KEY' in st.secrets:
+            os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+        if 'MODEL' in st.secrets:
+            os.environ['MODEL'] = st.secrets['MODEL']
+        if 'ANALYSIS_MODEL' in st.secrets:
+            os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
+        if 'OUT_DIR' in st.secrets:
+            os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
+        if 'MAX_RETRIES' in st.secrets:
+            os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
+        # Reload Config after setting environment variables
+        Config._reload_from_env()
+except (AttributeError, TypeError, KeyError):
+    # st.secrets not available or key not found - will use .env file
+    pass
 
 # Custom CSS for better styling
 st.markdown("""
