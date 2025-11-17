@@ -19,16 +19,20 @@ if env_path.exists():
 
 # Load API key from Streamlit secrets (for cloud deployment) or environment
 # Streamlit secrets take precedence over .env file
-if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-    os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
-    if 'MODEL' in st.secrets:
-        os.environ['MODEL'] = st.secrets['MODEL']
-    if 'ANALYSIS_MODEL' in st.secrets:
-        os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
-    if 'OUT_DIR' in st.secrets:
-        os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
-    if 'MAX_RETRIES' in st.secrets:
-        os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
+try:
+    if hasattr(st, 'secrets') and st.secrets and 'OPENAI_API_KEY' in st.secrets:
+        os.environ['OPENAI_API_KEY'] = st.secrets['OPENAI_API_KEY']
+        if 'MODEL' in st.secrets:
+            os.environ['MODEL'] = st.secrets['MODEL']
+        if 'ANALYSIS_MODEL' in st.secrets:
+            os.environ['ANALYSIS_MODEL'] = st.secrets['ANALYSIS_MODEL']
+        if 'OUT_DIR' in st.secrets:
+            os.environ['OUT_DIR'] = st.secrets['OUT_DIR']
+        if 'MAX_RETRIES' in st.secrets:
+            os.environ['MAX_RETRIES'] = str(st.secrets['MAX_RETRIES'])
+except Exception:
+    # If secrets access fails, continue - will use .env file or fail later with clear error
+    pass
 
 from yt2txt.config import Config
 from yt2txt.downloader import download_audio
