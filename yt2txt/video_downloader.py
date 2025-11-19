@@ -123,7 +123,8 @@ def download_video(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'postprocessors': [],
         'nopostoverwrites': True,
         'progress_hooks': [progress_hook],
-        # Basic options - let yt-dlp handle bot detection with its defaults
+        # Use android client to bypass bot detection (most reliable method)
+        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     
     metadata = {}

@@ -119,8 +119,8 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'writethumbnail': False,
         'writesubtitles': False,
         'writeautomaticsub': False,
-        # Basic options - let yt-dlp handle bot detection with its defaults
-        # The updated yt-dlp version should handle this better
+        # Use android client to bypass bot detection (most reliable method)
+        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     
     # Monkey-patch to prevent post-processors from running
