@@ -8,13 +8,16 @@ import tempfile
 import shutil
 
 # Add the project root to the path so we can import yt2txt modules
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# Try to handle path issues more safely
+try:
+    project_root = Path(__file__).parent.resolve()
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+except Exception:
+    # If path setup fails, continue anyway
+    pass
 
-# Load .env file (for local development)
-from dotenv import load_dotenv
-load_dotenv()
-
+# Import modules - if any fail, the app will show an error
 from yt2txt.config import Config
 from yt2txt.downloader import download_audio
 from yt2txt.video_downloader import download_video
@@ -35,28 +38,30 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# TEMPORARILY DISABLED: Secrets loading to test if app loads
-# If app loads without this, we know secrets access is the issue
-# def load_streamlit_secrets():
-#     """Load secrets from Streamlit Cloud into Config."""
-#     try:
-#         if not hasattr(st, 'secrets'):
-#             return
-#         if not st.secrets:
-#             return
-#         if 'OPENAI_API_KEY' in st.secrets:
-#             Config.OPENAI_API_KEY = st.secrets['OPENAI_API_KEY']
-#         if 'MODEL' in st.secrets:
-#             Config.MODEL = st.secrets['MODEL']
-#         if 'ANALYSIS_MODEL' in st.secrets:
-#             Config.ANALYSIS_MODEL = st.secrets['ANALYSIS_MODEL']
-#         if 'OUT_DIR' in st.secrets:
-#             Config.OUT_DIR = Path(st.secrets['OUT_DIR']).resolve()
-#         if 'MAX_RETRIES' in st.secrets:
-#             Config.MAX_RETRIES = int(st.secrets['MAX_RETRIES'])
-#     except:
-#         pass
-# load_streamlit_secrets()
+# Load secrets from Streamlit Cloud and update Config
+# This happens AFTER page config when st.secrets is safe to access
+def load_streamlit_secrets():
+    """Load secrets from Streamlit Cloud into Config."""
+    try:
+        if not hasattr(st, 'secrets'):
+            return
+        if not st.secrets:
+            return
+        if 'OPENAI_API_KEY' in st.secrets:
+            Config.OPENAI_API_KEY = st.secrets['OPENAI_API_KEY']
+        if 'MODEL' in st.secrets:
+            Config.MODEL = st.secrets['MODEL']
+        if 'ANALYSIS_MODEL' in st.secrets:
+            Config.ANALYSIS_MODEL = st.secrets['ANALYSIS_MODEL']
+        if 'OUT_DIR' in st.secrets:
+            Config.OUT_DIR = Path(st.secrets['OUT_DIR']).resolve()
+        if 'MAX_RETRIES' in st.secrets:
+            Config.MAX_RETRIES = int(st.secrets['MAX_RETRIES'])
+    except (AttributeError, TypeError, KeyError, ValueError):
+        # Silently fail - will use .env file values
+        pass
+
+load_streamlit_secrets()
 
 # Custom CSS for better styling
 st.markdown("""
