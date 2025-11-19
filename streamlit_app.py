@@ -206,14 +206,13 @@ def fix_number_formatting(text: str) -> str:
     """
     Wrap numbers in spans to prevent them from breaking across lines.
     This fixes the issue where numbers like '100 million' break into '1 0 0 m i l l i o n'.
-    """
-    # More comprehensive pattern that matches:
-    # - Currency symbols + numbers: "$100", "€5"
-    # - Number ranges: "5 to 6", "5 to 6 million"
-    # - Numbers with scale words: "100 million", "12 100 million"
-    # - Standalone multi-digit numbers: "100", "12100"
     
-    # First, handle ranges (most specific)
+    Uses a simple approach that avoids complex lookbehinds which can cause regex errors.
+    """
+    # Strategy: Process text in chunks, avoiding HTML tags
+    # Split by HTML tags to process text content separately from tags
+    
+    # First, handle number ranges (most specific pattern)
     text = re.sub(
         r'(\d+)\s+to\s+(\d+)\s*(million|billion|trillion|thousand|hundred|per\s+\w+)?',
         r'<span style="white-space: nowrap;">\1 to \2\3</span>',
@@ -229,18 +228,48 @@ def fix_number_formatting(text: str) -> str:
         flags=re.IGNORECASE
     )
     
-    # Finally, handle standalone numbers (2+ digits, not already wrapped)
-    # Use fixed-width lookbehind/lookahead (Python requires fixed-width for lookbehind)
-    # Pattern: (?<!>) = not immediately after '>', (?!<) = not immediately before '<'
-    # This prevents matching numbers that are part of HTML tag attributes
-    # Note: This may double-wrap some numbers already wrapped above, but nested spans are valid HTML
-    text = re.sub(
-        r'(?<!>)\b(\d{2,}[\d,.]*)\b(?!<)',
-        r'<span style="white-space: nowrap;">\1</span>',
-        text
-    )
+    # For standalone numbers, use a simpler approach:
+    # Process the text by splitting on HTML tags, then processing text parts only
+    parts = []
+    last_end = 0
     
-    return text
+    # Find all HTML tags (including our newly added spans)
+    for match in re.finditer(r'<[^>]+>', text):
+        # Process text before the tag
+        before_text = text[last_end:match.start()]
+        if before_text:
+            # Wrap standalone numbers in the text (not in tags)
+            before_text = re.sub(
+                r'\b(\d{2,}[\d,.]*)\b',
+                r'<span style="white-space: nowrap;">\1</span>',
+                before_text
+            )
+            parts.append(before_text)
+        
+        # Add the tag itself unchanged
+        parts.append(match.group(0))
+        last_end = match.end()
+    
+    # Process remaining text after last tag
+    remaining_text = text[last_end:]
+    if remaining_text:
+        remaining_text = re.sub(
+            r'\b(\d{2,}[\d,.]*)\b',
+            r'<span style="white-space: nowrap;">\1</span>',
+            remaining_text
+        )
+        parts.append(remaining_text)
+    
+    # If no HTML tags found, process entire text
+    if not parts:
+        text = re.sub(
+            r'\b(\d{2,}[\d,.]*)\b',
+            r'<span style="white-space: nowrap;">\1</span>',
+            text
+        )
+        return text
+    
+    return ''.join(parts)
 
 
 def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata: dict, force: bool = False):
