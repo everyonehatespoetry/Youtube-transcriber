@@ -4,7 +4,6 @@ import streamlit as st
 import sys
 import os
 from pathlib import Path
-import tempfile
 import shutil
 
 # Add the project root to the path so we can import yt2txt modules
@@ -100,10 +99,12 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
             Config.validate()
             st.success("✓ Configuration validated")
         
-        # Create temporary output directory
-        temp_dir = Path(tempfile.mkdtemp())
+        # Use persistent output directory for caching (not temp - cache needs to persist!)
+        # This allows transcripts to be cached across runs, saving API costs
+        persistent_out_dir = Config.OUT_DIR.resolve()
+        persistent_out_dir.mkdir(parents=True, exist_ok=True)
         original_out_dir = Config.OUT_DIR
-        Config.OUT_DIR = temp_dir
+        Config.OUT_DIR = persistent_out_dir
         
         try:
             # Download audio
@@ -121,32 +122,45 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
             transcript_path = output_dir / "transcript.json"
             transcript_cached = transcript_path.exists() and not force
             
+            # Debug: Show cache status
             if transcript_cached:
-                # Load cached transcript
-                st.info("ℹ️ Using cached transcript - loading from previous run")
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                from yt2txt.models import Segment
-                segments = [
-                    Segment(start=s['start'], end=s['end'], text=s['text'])
-                    for s in data.get('segments', [])
-                ]
-                
-                from yt2txt.models import Transcript
-                transcript = Transcript(
-                    video_id=data.get('video_id', video_id),
-                    url=data.get('url', url),
-                    title=data.get('title'),
-                    channel=data.get('channel'),
-                    duration=data.get('duration'),
-                    language=data.get('language'),
-                    segments=segments
-                )
-                st.session_state.transcript = transcript
-                st.success("✓ Cached transcript loaded")
+                st.info(f"ℹ️ Found cached transcript at: {transcript_path}")
             else:
-                # Transcribe (not cached)
+                if force:
+                    st.info("ℹ️ Force reprocess enabled - will re-transcribe")
+                elif not transcript_path.exists():
+                    st.info(f"ℹ️ No cached transcript found at: {transcript_path}")
+            
+            if transcript_cached:
+                # Load cached transcript (NO API CALL - saves money!)
+                try:
+                    st.info("ℹ️ Using cached transcript - loading from previous run (no API call)")
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    segments = [
+                        Segment(start=s['start'], end=s['end'], text=s['text'])
+                        for s in data.get('segments', [])
+                    ]
+                    
+                    transcript = Transcript(
+                        video_id=data.get('video_id', video_id),
+                        url=data.get('url', url),
+                        title=data.get('title'),
+                        channel=data.get('channel'),
+                        duration=data.get('duration'),
+                        language=data.get('language'),
+                        segments=segments
+                    )
+                    st.session_state.transcript = transcript
+                    st.success("✓ Cached transcript loaded (no cost)")
+                except Exception as e:
+                    st.warning(f"⚠️ Failed to load cached transcript: {e}. Will re-transcribe.")
+                    # Fall through to transcribe if cache load fails
+                    transcript_cached = False
+            
+            if not transcript_cached:
+                # Transcribe (not cached or cache load failed)
                 with st.spinner("Transcribing audio (this may take a few minutes for long videos)..."):
                     transcript = transcribe_audio(audio_path, video_id, url, metadata, force=force)
                     st.session_state.transcript = transcript
