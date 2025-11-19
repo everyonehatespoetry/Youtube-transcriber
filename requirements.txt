@@ -1,5 +1,5 @@
 openai>=1.10.0
-yt-dlp>=2023.11.16
+yt-dlp>=2024.12.13
 python-dotenv>=1.0.1
 tqdm>=4.66.1
 easyocr>=1.7.0

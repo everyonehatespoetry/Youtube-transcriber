@@ -128,9 +128,16 @@ def download_video(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'referer': 'https://www.youtube.com/',
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],  # Try android client first, fallback to web
+                'player_client': ['android', 'ios', 'tv_embedded', 'web'],  # Try multiple clients
                 'player_skip': ['webpage', 'configs'],  # Skip some checks
             }
+        },
+        # Additional headers to look more like a browser
+        'http_headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
         },
     }
     
