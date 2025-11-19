@@ -119,22 +119,8 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'writethumbnail': False,
         'writesubtitles': False,
         'writeautomaticsub': False,
-        # Add options to help bypass YouTube bot detection
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'referer': 'https://www.youtube.com/',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'tv_embedded', 'web'],  # Try multiple clients, tv_embedded often works better
-                'player_skip': ['webpage', 'configs'],  # Skip some checks
-            }
-        },
-        # Additional headers to look more like a browser
-        'http_headers': {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-        },
+        # Basic options - let yt-dlp handle bot detection with its defaults
+        # The updated yt-dlp version should handle this better
     }
     
     # Monkey-patch to prevent post-processors from running
