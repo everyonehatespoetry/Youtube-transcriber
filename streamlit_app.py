@@ -423,7 +423,6 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
                         slides = extractor.process_video(video_path, output_dir, interval_seconds=1.0)
                         
                         if slides:
-                            import json
                             slides_manifest = [
                                 {
                                     'timestamp': timestamp,
