@@ -5,6 +5,8 @@ import sys
 import os
 from pathlib import Path
 import shutil
+import time
+import threading
 
 # Add the project root to the path so we can import yt2txt modules
 # Try to handle path issues more safely
@@ -135,6 +137,71 @@ if 'current_video_url' not in st.session_state:
     st.session_state.current_video_url = None
 
 
+def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata: dict, force: bool = False):
+    """
+    Transcribe audio with a progress bar showing estimated progress.
+    Since OpenAI API doesn't provide real-time progress, we estimate based on:
+    - File upload time (estimated from file size)
+    - Processing time (estimated from audio duration)
+    """
+    from yt2txt.transcriber import transcribe_audio
+    
+    # Get file size and duration for estimation
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+    audio_duration = metadata.get('duration', 0)  # in seconds
+    
+    # Estimate times (conservative estimates)
+    # Upload: assume ~0.5 MB/s (conservative for large files)
+    upload_time_estimate = max(10, file_size_mb / 0.5)  # at least 10 seconds
+    
+    # Processing: assume ~0.5x real-time (conservative - API is usually faster)
+    processing_time_estimate = max(30, audio_duration * 0.5)  # at least 30 seconds
+    
+    total_time_estimate = upload_time_estimate + processing_time_estimate
+    
+    # Create progress bar and status container
+    # Note: Since Streamlit blocks during API calls, we show initial status and completion
+    progress_bar = st.progress(0)
+    status_container = st.empty()
+    
+    # Show initial status with estimates
+    status_container.markdown(f"""
+    **📤 Uploading & Processing Audio**
+    
+    - 📁 File size: **{file_size_mb:.1f} MB**  
+    - ⏱️ Audio duration: **{int(audio_duration)}s**  
+    - ⏳ Estimated time: **~{int(total_time_estimate)}s**
+    
+    *This may take a few minutes for large files. Please wait...*
+    """)
+    progress_bar.progress(0.1)  # Show we've started (10%)
+    
+    start_time = time.time()
+    
+    try:
+        # Call transcribe_audio - this will block, so UI won't update during
+        result = transcribe_audio(audio_path, video_id, url, metadata, force=force)
+        
+        # Update to show completion
+        elapsed = time.time() - start_time
+        progress_bar.progress(1.0)
+        status_container.markdown(f"""
+        **✓ Transcription Complete!**
+        
+        - ⏱️ Actual time: **{int(elapsed)}s**  
+        - 📊 Estimated time: **~{int(total_time_estimate)}s**
+        - ✅ Status: **Success**
+        """)
+        time.sleep(1.5)  # Show completion message briefly
+        
+        return result
+    except Exception as e:
+        # Show error
+        progress_bar.progress(0)
+        status_container.error(f"❌ **Error during transcription:** {str(e)}")
+        raise e
+
+
 def fix_number_formatting(text: str) -> str:
     """
     Wrap numbers in spans to prevent them from breaking across lines.
@@ -172,6 +239,71 @@ def fix_number_formatting(text: str) -> str:
     return text
 
 
+def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata: dict, force: bool = False):
+    """
+    Transcribe audio with a progress bar showing estimated progress.
+    Since OpenAI API doesn't provide real-time progress, we estimate based on:
+    - File upload time (estimated from file size)
+    - Processing time (estimated from audio duration)
+    """
+    from yt2txt.transcriber import transcribe_audio
+    
+    # Get file size and duration for estimation
+    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+    audio_duration = metadata.get('duration', 0)  # in seconds
+    
+    # Estimate times (conservative estimates)
+    # Upload: assume ~0.5 MB/s (conservative for large files)
+    upload_time_estimate = max(10, file_size_mb / 0.5)  # at least 10 seconds
+    
+    # Processing: assume ~0.5x real-time (conservative - API is usually faster)
+    processing_time_estimate = max(30, audio_duration * 0.5)  # at least 30 seconds
+    
+    total_time_estimate = upload_time_estimate + processing_time_estimate
+    
+    # Create progress bar and status container
+    # Note: Since Streamlit blocks during API calls, we show initial status and completion
+    progress_bar = st.progress(0)
+    status_container = st.empty()
+    
+    # Show initial status with estimates
+    status_container.markdown(f"""
+    **📤 Uploading & Processing Audio**
+    
+    - 📁 File size: **{file_size_mb:.1f} MB**  
+    - ⏱️ Audio duration: **{int(audio_duration)}s**  
+    - ⏳ Estimated time: **~{int(total_time_estimate)}s**
+    
+    *This may take a few minutes for large files. Please wait...*
+    """)
+    progress_bar.progress(0.1)  # Show we've started (10%)
+    
+    start_time = time.time()
+    
+    try:
+        # Call transcribe_audio - this will block, so UI won't update during
+        result = transcribe_audio(audio_path, video_id, url, metadata, force=force)
+        
+        # Update to show completion
+        elapsed = time.time() - start_time
+        progress_bar.progress(1.0)
+        status_container.markdown(f"""
+        **✓ Transcription Complete!**
+        
+        - ⏱️ Actual time: **{int(elapsed)}s**  
+        - 📊 Estimated time: **~{int(total_time_estimate)}s**
+        - ✅ Status: **Success**
+        """)
+        time.sleep(1.5)  # Show completion message briefly
+        
+        return result
+    except Exception as e:
+        # Show error
+        progress_bar.progress(0)
+        status_container.error(f"❌ **Error during transcription:** {str(e)}")
+        raise e
+
+
 def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force: bool = False):
     """Process video with Streamlit progress indicators."""
     try:
@@ -200,12 +332,33 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
                     st.info("ℹ️ Using cached audio file - video was previously downloaded")
             
             # Check if transcript is already cached before transcribing
-            transcript_path = output_dir / "transcript.json"
+            # Use the same path that transcribe_audio() uses (audio_path.parent)
+            transcript_path = output_dir / "transcript.json"  # output_dir = audio_path.parent
             transcript_cached = transcript_path.exists() and not force
             
-            # Debug: Show cache status
+            # If not found at expected path, search by video_id in case folder name changed
+            if not transcript_cached and not force and persistent_out_dir.exists():
+                # Search for transcript.json files that contain this video_id
+                for transcript_file in persistent_out_dir.rglob("transcript.json"):
+                    try:
+                        with open(transcript_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            if data.get('video_id') == video_id:
+                                # Found transcript with matching video_id!
+                                transcript_path = transcript_file
+                                output_dir = transcript_file.parent  # Update output_dir to match found location
+                                st.session_state.output_dir = output_dir
+                                transcript_cached = True
+                                st.info(f"ℹ️ Found cached transcript (folder name may have changed): {transcript_path}")
+                                break
+                    except (json.JSONDecodeError, IOError):
+                        continue
+            
+            # Debug: Show cache status and path
             if transcript_cached:
-                st.info(f"ℹ️ Found cached transcript at: {transcript_path}")
+                if not st.session_state.get('_cache_found_shown'):
+                    st.info(f"ℹ️ Found cached transcript at: {transcript_path}")
+                    st.session_state['_cache_found_shown'] = True
             else:
                 if force:
                     st.info("ℹ️ Force reprocess enabled - will re-transcribe")
@@ -242,10 +395,11 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
             
             if not transcript_cached:
                 # Transcribe (not cached or cache load failed)
-                with st.spinner("Transcribing audio (this may take a few minutes for long videos)..."):
-                    transcript = transcribe_audio(audio_path, video_id, url, metadata, force=force)
-                    st.session_state.transcript = transcript
-                    st.success("✓ New transcript created")
+                # transcribe_audio() also checks for cache internally, so it won't re-transcribe if cached
+                # Use progress bar wrapper for better user feedback
+                transcript = transcribe_with_progress(audio_path, video_id, url, metadata, force=force)
+                st.session_state.transcript = transcript
+                st.success("✓ Transcript ready")
             
             # Write transcript files
             with st.spinner("Saving transcript files..."):
@@ -459,7 +613,8 @@ def main():
                                     "📄 Download TXT",
                                     f.read(),
                                     file_name="transcript.txt",
-                                    mime="text/plain"
+                                    mime="text/plain",
+                                    key="download_txt_after_process"
                                 )
                         
                         with col2:
@@ -468,7 +623,8 @@ def main():
                                     "📋 Download JSON",
                                     f.read(),
                                     file_name="transcript.json",
-                                    mime="application/json"
+                                    mime="application/json",
+                                    key="download_json_after_process"
                                 )
                         
                         with col3:
@@ -477,7 +633,8 @@ def main():
                                     "🎬 Download SRT",
                                     f.read(),
                                     file_name="transcript.srt",
-                                    mime="text/plain"
+                                    mime="text/plain",
+                                    key="download_srt_after_process"
                                 )
                         
                         if st.session_state.analysis_text:
@@ -486,7 +643,8 @@ def main():
                                     "📊 Download Analysis",
                                     st.session_state.analysis_text,
                                     file_name="equity_analysis.txt",
-                                    mime="text/plain"
+                                    mime="text/plain",
+                                    key="download_analysis_after_process"
                                 )
                         
                         # Store current video URL
@@ -530,7 +688,8 @@ def main():
                             "📄 Download TXT",
                             f.read(),
                             file_name="transcript.txt",
-                            mime="text/plain"
+                            mime="text/plain",
+                            key="download_txt_current"
                         )
                 
                 with col2:
@@ -539,7 +698,8 @@ def main():
                             "📋 Download JSON",
                             f.read(),
                             file_name="transcript.json",
-                            mime="application/json"
+                            mime="application/json",
+                            key="download_json_current"
                         )
                 
                 with col3:
@@ -548,7 +708,8 @@ def main():
                             "🎬 Download SRT",
                             f.read(),
                             file_name="transcript.srt",
-                            mime="text/plain"
+                            mime="text/plain",
+                            key="download_srt_current"
                         )
                 
                 if st.session_state.analysis_text:
@@ -557,7 +718,8 @@ def main():
                             "📊 Download Analysis",
                             st.session_state.analysis_text,
                             file_name="equity_analysis.txt",
-                            mime="text/plain"
+                            mime="text/plain",
+                            key="download_analysis_current"
                         )
             
             # Show transcript preview
