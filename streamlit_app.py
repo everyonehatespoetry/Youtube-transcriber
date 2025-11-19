@@ -230,23 +230,13 @@ def fix_number_formatting(text: str) -> str:
     )
     
     # Finally, handle standalone numbers (2+ digits, not already wrapped)
-    # Use a simpler approach: match numbers that aren't immediately after '>' or before '<'
-    # This avoids wrapping numbers that are already inside HTML tags
-    # We'll use a callback function to check context and avoid double-wrapping
-    def wrap_if_not_in_tag(match):
-        num_text = match.group(0)
-        # Simple check: if the number is already wrapped, don't wrap again
-        # We check by looking for span tags in a small window around the match
-        # But since we can't easily access the full text in the callback,
-        # we'll just wrap it - the previous patterns should have caught most cases
-        # and double-wrapping won't break anything (nested spans are fine)
-        return f'<span style="white-space: nowrap;">{num_text}</span>'
-    
-    # Match standalone numbers (2+ digits) that aren't immediately after '>' or before '<'
-    # This prevents matching numbers inside HTML tags
+    # Use fixed-width lookbehind/lookahead (Python requires fixed-width for lookbehind)
+    # Pattern: (?<!>) = not immediately after '>', (?!<) = not immediately before '<'
+    # This prevents matching numbers that are part of HTML tag attributes
+    # Note: This may double-wrap some numbers already wrapped above, but nested spans are valid HTML
     text = re.sub(
         r'(?<!>)\b(\d{2,}[\d,.]*)\b(?!<)',
-        wrap_if_not_in_tag,
+        r'<span style="white-space: nowrap;">\1</span>',
         text
     )
     
