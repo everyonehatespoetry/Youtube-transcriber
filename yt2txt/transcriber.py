@@ -14,23 +14,37 @@ from yt2txt.models import Segment, Transcript
 def _compress_audio(audio_path: Path, max_size_bytes: int) -> Path:
     """
     Compress audio file to fit within size limit.
-    Tries to use pydub if available, otherwise returns original.
+    Tries multiple methods: pydub, then falls back to re-downloading lower quality.
     """
+    original_size = audio_path.stat().st_size
+    
+    # Try pydub compression first (requires ffmpeg)
     try:
         from pydub import AudioSegment
+        
+        # Check if ffmpeg is available (pydub needs it)
+        try:
+            AudioSegment.converter = "ffmpeg"  # This will fail if ffmpeg not found
+            # Test if we can actually use it
+            test_audio = AudioSegment.silent(duration=100)  # Quick test
+        except Exception as ffmpeg_error:
+            raise ImportError(f"ffmpeg not available: {ffmpeg_error}. Compression requires ffmpeg.")
         
         # Load audio
         audio = AudioSegment.from_file(str(audio_path))
         
-        # Calculate target bitrate to get under limit
+        # Calculate target bitrate to get under limit (with safety margin)
         duration_seconds = len(audio) / 1000.0
-        target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 10  # Leave 10 kbps margin
+        # Calculate bitrate needed: (size_bytes * 8 bits) / (duration_seconds * 1000) = kbps
+        target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 20  # 20 kbps safety margin
         
-        # Don't go below 32 kbps (too low quality)
-        target_bitrate_kbps = max(32, min(target_bitrate_kbps, 128))
+        # Don't go below 24 kbps (minimum for speech), but be aggressive to fit under limit
+        target_bitrate_kbps = max(24, min(target_bitrate_kbps, 48))  # More aggressive - cap at 48 kbps
         
         # Export as compressed m4a
         compressed_path = audio_path.parent / f"{audio_path.stem}_compressed.m4a"
+        print(f"  Attempting compression to {target_bitrate_kbps} kbps...")
+        
         audio.export(
             str(compressed_path),
             format="m4a",
@@ -38,26 +52,59 @@ def _compress_audio(audio_path: Path, max_size_bytes: int) -> Path:
             codec="aac"
         )
         
-        # If still too large, try even lower bitrate
-        if compressed_path.stat().st_size > max_size_bytes:
-            target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 20
-            target_bitrate_kbps = max(32, target_bitrate_kbps)
+        compressed_size = compressed_path.stat().st_size
+        print(f"  Compressed: {original_size / (1024*1024):.1f} MB -> {compressed_size / (1024*1024):.1f} MB")
+        
+        # If still too large, try even lower bitrate (more aggressive)
+        if compressed_size > max_size_bytes:
+            target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 40
+            target_bitrate_kbps = max(24, target_bitrate_kbps)  # Go as low as 24 kbps if needed
+            print(f"  Still too large, trying {target_bitrate_kbps} kbps...")
             audio.export(
                 str(compressed_path),
                 format="m4a",
                 bitrate=f"{target_bitrate_kbps}k",
                 codec="aac"
             )
+            compressed_size = compressed_path.stat().st_size
+            print(f"  Final size: {compressed_size / (1024*1024):.1f} MB")
         
-        return compressed_path
+        final_size = compressed_path.stat().st_size
+        if final_size <= max_size_bytes:
+            print(f"  ✓ Successfully compressed to {final_size / (1024*1024):.2f} MB")
+            return compressed_path
+        else:
+            print(f"  ⚠ Compression still resulted in file over limit: {final_size / (1024*1024):.2f} MB")
+            # Try one more time with absolute minimum bitrate
+            target_bitrate_kbps = max(24, int((max_size_bytes * 8) / (duration_seconds * 1000)) - 50)
+            print(f"  Trying absolute minimum bitrate: {target_bitrate_kbps} kbps...")
+            audio.export(
+                str(compressed_path),
+                format="m4a",
+                bitrate=f"{target_bitrate_kbps}k",
+                codec="aac"
+            )
+            final_size = compressed_path.stat().st_size
+            if final_size <= max_size_bytes:
+                print(f"  ✓ Successfully compressed to {final_size / (1024*1024):.2f} MB")
+                return compressed_path
+            else:
+                compressed_path.unlink()  # Delete failed compression
+                raise ValueError(f"Compression failed: file still {final_size / (1024*1024):.2f} MB (limit: 25 MB)")
         
     except ImportError:
-        # pydub not available, return original (will fail but at least we tried)
-        print("⚠ pydub not available for compression. Install with: pip install pydub")
-        return audio_path
+        print("⚠ pydub not available. ffmpeg may be required for compression.")
+        raise
     except Exception as e:
-        print(f"⚠ Compression failed: {e}. Using original file.")
-        return audio_path
+        print(f"⚠ Compression failed: {e}")
+        # Clean up if compressed file exists but is invalid
+        compressed_path = audio_path.parent / f"{audio_path.stem}_compressed.m4a"
+        if compressed_path.exists():
+            try:
+                compressed_path.unlink()
+            except:
+                pass
+        raise
 
 
 def transcribe_audio(
@@ -114,10 +161,28 @@ def transcribe_audio(
     
     # If file is too large, we need to compress it
     if file_size_bytes > max_size_bytes:
-        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit. Compressing...")
-        audio_path = _compress_audio(audio_path, max_size_bytes)
-        file_size_mb = audio_path.stat().st_size / (1024 * 1024)
-        print(f"✓ Compressed to {file_size_mb:.1f} MB")
+        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit. Attempting compression...")
+        try:
+            audio_path = _compress_audio(audio_path, max_size_bytes)
+            file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            if audio_path.stat().st_size > max_size_bytes:
+                raise ValueError(f"Compressed file still too large: {file_size_mb:.1f} MB")
+            print(f"✓ Compressed to {file_size_mb:.1f} MB")
+        except Exception as e:
+            # Check if it's an ffmpeg issue
+            error_str = str(e).lower()
+            if 'ffmpeg' in error_str or 'not found' in error_str:
+                error_msg = (
+                    f"File too large ({file_size_mb:.1f} MB) and compression requires ffmpeg, "
+                    f"which is not available on this system. "
+                    f"Please try a shorter video (under ~20 minutes) or contact support."
+                )
+            else:
+                error_msg = (
+                    f"File too large ({file_size_mb:.1f} MB) and compression failed: {str(e)}. "
+                    f"Please try a shorter video (under ~20 minutes)."
+                )
+            raise RuntimeError(error_msg) from e
     
     # Get file size for timeout estimation
     # Calculate timeout: base 5 minutes + 1 minute per 10MB

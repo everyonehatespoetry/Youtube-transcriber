@@ -101,7 +101,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     # Format selection: prefer smaller files, but ensure m4a format
     ydl_opts = {
-        'format': 'worstaudio[ext=m4a][filesize<25M]/bestaudio[ext=m4a][filesize<25M]/worstaudio[ext=m4a]/bestaudio[ext=m4a]/best[ext=m4a]/best',
+        # Prefer smaller formats to stay under 25 MB limit
+        # Prioritize worst quality (smallest file size) to avoid compression issues
+        'format': 'worstaudio[ext=m4a]/worstaudio/bestaudio[ext=m4a]/bestaudio/best',
         'outtmpl': str(audio_path.with_suffix('')),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter

@@ -91,7 +91,7 @@ if 'processing' not in st.session_state:
     st.session_state.processing = False
 
 
-def process_video_streamlit(url: str, extract_slides: bool, analyze: bool):
+def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force: bool = False):
     """Process video with Streamlit progress indicators."""
     try:
         # Validate configuration first
@@ -107,14 +107,27 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool):
         try:
             # Download audio
             with st.spinner("Downloading audio from YouTube..."):
-                audio_path, metadata, video_id = download_audio(url, force=False)
+                audio_path, metadata, video_id = download_audio(url, force=force)
                 output_dir = audio_path.parent
                 st.session_state.output_dir = output_dir
+                
+                # Check if using cached audio
+                transcript_path = output_dir / "transcript.json"
+                audio_cached = audio_path.exists() and not force
+                if audio_cached:
+                    st.info("ℹ️ Using cached audio file - video was previously downloaded")
             
             # Transcribe
             with st.spinner("Transcribing audio (this may take a few minutes for long videos)..."):
-                transcript = transcribe_audio(audio_path, video_id, url, metadata, force=False)
+                transcript = transcribe_audio(audio_path, video_id, url, metadata, force=force)
                 st.session_state.transcript = transcript
+                
+                # Check if using cached transcript
+                transcript_cached = transcript_path.exists() and not force
+                if transcript_cached:
+                    st.info("ℹ️ Using cached transcript - no re-transcription needed")
+                else:
+                    st.success("✓ New transcript created")
             
             # Write transcript files
             with st.spinner("Saving transcript files..."):
@@ -158,14 +171,22 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool):
             
             # Analyze transcript if requested
             if analyze:
-                with st.spinner("Analyzing transcript with GPT (this may take a minute)..."):
-                    try:
-                        analysis_text = analyze_transcript(transcript, output_dir, force=False)
-                        write_analysis(analysis_text, output_dir / "equity_analysis.txt")
-                        st.session_state.analysis_text = analysis_text
-                        st.success("✓ Analysis complete!")
-                    except Exception as e:
-                        st.error(f"⚠ Error analyzing transcript: {str(e)}")
+                analysis_path = output_dir / "equity_analysis.txt"
+                if analysis_path.exists() and not force:
+                    st.info("ℹ️ Using cached analysis - loading from previous run")
+                    with open(analysis_path, 'r', encoding='utf-8') as f:
+                        analysis_text = f.read()
+                    st.session_state.analysis_text = analysis_text
+                    st.success("✓ Analysis loaded from cache!")
+                else:
+                    with st.spinner("Analyzing transcript with GPT (this may take a minute)..."):
+                        try:
+                            analysis_text = analyze_transcript(transcript, output_dir, force=force)
+                            write_analysis(analysis_text, output_dir / "equity_analysis.txt")
+                            st.session_state.analysis_text = analysis_text
+                            st.success("✓ Analysis complete!")
+                        except Exception as e:
+                            st.error(f"⚠ Error analyzing transcript: {str(e)}")
             
             return True, output_dir
             
@@ -189,9 +210,28 @@ def main():
         st.header("⚙️ Settings")
         st.info("This app uses the server's OpenAI API key. No API key needed from you!")
         
+        # Show current status
+        st.subheader("📊 Current Status")
+        if st.session_state.transcript:
+            if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.caption(f"**Video:** {st.session_state.transcript.title}")
+            st.success(f"✓ Transcript ready ({len(st.session_state.transcript.segments)} segments)")
+            if st.session_state.analysis_text:
+                st.success("✓ Analysis ready")
+            else:
+                st.info("ℹ️ No analysis yet")
+        else:
+            st.info("No video processed yet")
+        
+        st.divider()
+        
         st.subheader("Options")
         extract_slides = st.checkbox("Extract slides from video", value=False)
         analyze = st.checkbox("Run equity analysis", value=True)
+        
+        # Add force reprocess option
+        st.divider()
+        force_reprocess = st.checkbox("🔄 Force reprocess (ignore cache)", value=False, help="Check this to re-download and re-transcribe even if already processed")
     
     # Main content area
     tab1, tab2, tab3 = st.tabs(["📥 Transcribe", "💬 Chat", "📊 Analysis"])
@@ -218,10 +258,12 @@ def main():
                 status_container = st.container()
                 with status_container:
                     st.info("🔄 Starting video processing... Please wait.")
+                    if force_reprocess:
+                        st.warning("⚠️ Force reprocess enabled - will re-download and re-transcribe")
                 
                 st.session_state.processing = True
                 try:
-                    success, output_dir = process_video_streamlit(url, extract_slides, analyze)
+                    success, output_dir = process_video_streamlit(url, extract_slides, analyze, force_reprocess)
                     st.session_state.processing = False
                     
                     if success:
@@ -287,9 +329,13 @@ def main():
     with tab2:
         st.header("💬 Ask Questions About the Transcript")
         
-        if not st.session_state.transcript:
+        # Check for transcript in session state
+        if st.session_state.transcript is None:
             st.info("👆 First transcribe a video in the 'Transcribe' tab to start asking questions.")
         else:
+            # Show video info if available
+            if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.caption(f"📹 {st.session_state.transcript.title}")
             st.success(f"✓ Transcript loaded ({len(st.session_state.transcript.segments)} segments)")
             
             # Display chat history
@@ -368,9 +414,13 @@ def main():
     with tab3:
         st.header("📊 Equity Analysis")
         
-        if not st.session_state.analysis_text:
-            st.info("👆 Run equity analysis in the 'Transcribe' tab to see the analysis here.")
+        # Check for analysis in session state
+        if st.session_state.analysis_text is None or st.session_state.analysis_text == "":
+            st.info("👆 Run equity analysis in the 'Transcribe' tab (check 'Run equity analysis' option) to see the analysis here.")
         else:
+            # Show video info if available
+            if st.session_state.transcript and hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.caption(f"📹 {st.session_state.transcript.title}")
             st.text_area(
                 "Analysis Results",
                 st.session_state.analysis_text,
