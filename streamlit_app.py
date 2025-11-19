@@ -28,6 +28,7 @@ from yt2txt.writers.srt_writer import write_srt
 from yt2txt.writers.analysis_writer import write_analysis
 from yt2txt.models import Transcript, Segment
 import json
+import re
 
 
 # Page configuration
@@ -75,6 +76,45 @@ st.markdown("""
     .stButton>button {
         width: 100%;
     }
+    /* Prevent numbers from breaking across lines in chat messages */
+    .stChatMessage {
+        word-break: break-word;
+    }
+    .stChatMessage p, .stChatMessage div {
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    /* Keep numbers together - prevent breaking within number sequences */
+    .stChatMessage * {
+        font-variant-numeric: tabular-nums;
+    }
+    /* Improved text formatting - clean black on white with darker font */
+    .stMarkdown, .stText, .stTextArea {
+        color: #1a1a1a !important;
+        font-weight: 500 !important;
+    }
+    .transcript-text {
+        color: #000000 !important;
+        font-weight: 600 !important;
+        font-size: 1.05em !important;
+        line-height: 1.8 !important;
+        background-color: #ffffff !important;
+        padding: 1rem !important;
+    }
+    .analysis-text {
+        color: #1a1a1a !important;
+        font-weight: 500 !important;
+        font-size: 1em !important;
+        line-height: 1.7 !important;
+        background-color: #ffffff !important;
+        padding: 1rem !important;
+    }
+    /* Make text areas more readable */
+    .stTextArea textarea {
+        color: #000000 !important;
+        font-weight: 500 !important;
+        background-color: #ffffff !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -89,6 +129,47 @@ if 'chat_messages' not in st.session_state:
     st.session_state.chat_messages = []
 if 'processing' not in st.session_state:
     st.session_state.processing = False
+if 'transcript_history' not in st.session_state:
+    st.session_state.transcript_history = []  # List of (video_id, title, url, transcript_path)
+if 'current_video_url' not in st.session_state:
+    st.session_state.current_video_url = None
+
+
+def fix_number_formatting(text: str) -> str:
+    """
+    Wrap numbers in spans to prevent them from breaking across lines.
+    This fixes the issue where numbers like '100 million' break into '1 0 0 m i l l i o n'.
+    """
+    # More comprehensive pattern that matches:
+    # - Currency symbols + numbers: "$100", "€5"
+    # - Number ranges: "5 to 6", "5 to 6 million"
+    # - Numbers with scale words: "100 million", "12 100 million"
+    # - Standalone multi-digit numbers: "100", "12100"
+    
+    # First, handle ranges (most specific)
+    text = re.sub(
+        r'(\d+)\s+to\s+(\d+)\s*(million|billion|trillion|thousand|hundred|per\s+\w+)?',
+        r'<span style="white-space: nowrap;">\1 to \2\3</span>',
+        text,
+        flags=re.IGNORECASE
+    )
+    
+    # Then handle number + scale word combinations
+    text = re.sub(
+        r'(\$|€|£)?\s*(\d+[\d,\s.]*)\s+(million|billion|trillion|thousand|hundred)',
+        r'<span style="white-space: nowrap;">\1\2 \3</span>',
+        text,
+        flags=re.IGNORECASE
+    )
+    
+    # Finally, handle standalone numbers (2+ digits, not already wrapped)
+    text = re.sub(
+        r'(?<!<span[^>]*>)(?<!>)\b(\d{2,}[\d,.]*)\b(?!</span>)',
+        r'<span style="white-space: nowrap;">\1</span>',
+        text
+    )
+    
+    return text
 
 
 def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force: bool = False):
@@ -269,9 +350,70 @@ def main():
         # Add force reprocess option
         st.divider()
         force_reprocess = st.checkbox("🔄 Force reprocess (ignore cache)", value=False, help="Check this to re-download and re-transcribe even if already processed")
+        
+        # Prior Transcript History
+        st.divider()
+        st.subheader("📚 Prior Transcripts")
+        if st.session_state.transcript_history:
+            for i, (video_id, title, url, transcript_path) in enumerate(st.session_state.transcript_history[:10]):  # Show last 10
+                # Check if this is the current transcript
+                is_current = (st.session_state.transcript and 
+                            hasattr(st.session_state.transcript, 'video_id') and 
+                            st.session_state.transcript.video_id == video_id)
+                
+                if is_current:
+                    st.markdown(f"**{title}** (Current)")
+                else:
+                    # Button to load this transcript
+                    if st.button(f"📹 {title[:50]}..." if len(title) > 50 else f"📹 {title}", 
+                               key=f"load_transcript_{i}", use_container_width=True):
+                        # Load transcript from file
+                        try:
+                            transcript_path_obj = Path(transcript_path)
+                            if transcript_path_obj.exists():
+                                with open(transcript_path_obj, 'r', encoding='utf-8') as f:
+                                    data = json.load(f)
+                                
+                                segments = [
+                                    Segment(start=s['start'], end=s['end'], text=s['text'])
+                                    for s in data.get('segments', [])
+                                ]
+                                
+                                transcript = Transcript(
+                                    video_id=data.get('video_id', video_id),
+                                    url=data.get('url', url),
+                                    title=data.get('title', title),
+                                    channel=data.get('channel'),
+                                    duration=data.get('duration'),
+                                    language=data.get('language'),
+                                    segments=segments
+                                )
+                                
+                                st.session_state.transcript = transcript
+                                st.session_state.current_video_url = url
+                                
+                                # Try to load analysis if it exists
+                                analysis_path = transcript_path_obj.parent / "equity_analysis.txt"
+                                if analysis_path.exists():
+                                    with open(analysis_path, 'r', encoding='utf-8') as f:
+                                        st.session_state.analysis_text = f.read()
+                                else:
+                                    st.session_state.analysis_text = None
+                                
+                                # Set output dir
+                                st.session_state.output_dir = transcript_path_obj.parent
+                                
+                                # Clear chat messages when switching transcripts
+                                st.session_state.chat_messages = []
+                                
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error loading transcript: {e}")
+        else:
+            st.caption("No prior transcripts yet")
     
     # Main content area
-    tab1, tab2, tab3 = st.tabs(["📥 Transcribe", "💬 Chat", "📊 Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📥 Transcribe", "📝 Transcript", "💬 Chat", "📊 Analysis"])
     
     # Tab 1: Transcription
     with tab1:
@@ -347,23 +489,116 @@ def main():
                                     mime="text/plain"
                                 )
                         
-                        # Show transcript preview
+                        # Store current video URL
+                        st.session_state.current_video_url = url
+                        
+                        # Add to transcript history if not already there
                         if st.session_state.transcript:
-                            st.subheader("📝 Transcript Preview")
-                            transcript_text = "\n".join(
-                                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
-                                for seg in st.session_state.transcript.segments[:20]
-                            )
-                            if len(st.session_state.transcript.segments) > 20:
-                                transcript_text += f"\n\n... and {len(st.session_state.transcript.segments) - 20} more segments"
-                            st.text_area("", transcript_text, height=300, disabled=True)
+                            video_id = st.session_state.transcript.video_id
+                            title = getattr(st.session_state.transcript, 'title', 'Unknown')
+                            url_for_history = st.session_state.transcript.url or url
+                            
+                            # Check if already in history
+                            if not any(h[0] == video_id for h in st.session_state.transcript_history):
+                                st.session_state.transcript_history.insert(0, (video_id, title, url_for_history, str(output_dir / "transcript.json")))
+                            
+                            # Check if already in history
+                            if not any(h[0] == video_id for h in st.session_state.transcript_history):
+                                st.session_state.transcript_history.insert(0, (video_id, title, url_for_history, str(output_dir / "transcript.json")))
                 except Exception as e:
                     st.session_state.processing = False
                     st.error(f"❌ Error: {str(e)}")
                     st.exception(e)  # Show full error traceback for debugging
+        
+        # Show current transcript if available (even when navigating back)
+        if st.session_state.transcript:
+            st.divider()
+            st.subheader("📝 Current Transcript")
+            if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.caption(f"**Video:** {st.session_state.transcript.title}")
+            if hasattr(st.session_state.transcript, 'channel') and st.session_state.transcript.channel:
+                st.caption(f"**Channel:** {st.session_state.transcript.channel}")
+            
+            # Show download options
+            if st.session_state.output_dir and (st.session_state.output_dir / "transcript_with_timestamps.txt").exists():
+                st.subheader("📥 Download Files")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    with open(st.session_state.output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
+                        st.download_button(
+                            "📄 Download TXT",
+                            f.read(),
+                            file_name="transcript.txt",
+                            mime="text/plain"
+                        )
+                
+                with col2:
+                    with open(st.session_state.output_dir / "transcript.json", "r", encoding="utf-8") as f:
+                        st.download_button(
+                            "📋 Download JSON",
+                            f.read(),
+                            file_name="transcript.json",
+                            mime="application/json"
+                        )
+                
+                with col3:
+                    with open(st.session_state.output_dir / "transcript.srt", "r", encoding="utf-8") as f:
+                        st.download_button(
+                            "🎬 Download SRT",
+                            f.read(),
+                            file_name="transcript.srt",
+                            mime="text/plain"
+                        )
+                
+                if st.session_state.analysis_text:
+                    with col4:
+                        st.download_button(
+                            "📊 Download Analysis",
+                            st.session_state.analysis_text,
+                            file_name="equity_analysis.txt",
+                            mime="text/plain"
+                        )
+            
+            # Show transcript preview
+            st.subheader("📝 Transcript Preview")
+            transcript_text = "\n".join(
+                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
+                for seg in st.session_state.transcript.segments[:20]
+            )
+            if len(st.session_state.transcript.segments) > 20:
+                transcript_text += f"\n\n... and {len(st.session_state.transcript.segments) - 20} more segments"
+            st.text_area("", transcript_text, height=300, disabled=True, key="transcribe_preview")
     
-    # Tab 2: Chat
+    # Tab 2: Full Transcript
     with tab2:
+        st.header("📝 Full Transcript")
+        
+        if st.session_state.transcript is None:
+            st.info("👆 First transcribe a video in the 'Transcribe' tab to view the full transcript.")
+        else:
+            # Show video info
+            if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.subheader(st.session_state.transcript.title)
+            if hasattr(st.session_state.transcript, 'channel') and st.session_state.transcript.channel:
+                st.caption(f"Channel: {st.session_state.transcript.channel}")
+            if hasattr(st.session_state.transcript, 'duration') and st.session_state.transcript.duration:
+                minutes = int(st.session_state.transcript.duration // 60)
+                seconds = int(st.session_state.transcript.duration % 60)
+                st.caption(f"Duration: {minutes}:{seconds:02d}")
+            
+            st.divider()
+            
+            # Display full transcript with better formatting
+            transcript_text = "\n\n".join(
+                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
+                for seg in st.session_state.transcript.segments
+            )
+            
+            st.markdown(f'<div class="transcript-text">{transcript_text}</div>', unsafe_allow_html=True)
+    
+    # Tab 3: Chat
+    with tab3:
         st.header("💬 Ask Questions About the Transcript")
         
         # Check for transcript in session state
@@ -380,7 +615,9 @@ def main():
                 st.subheader("💭 Conversation History")
                 for i, (role, content) in enumerate(st.session_state.chat_messages):
                     with st.chat_message(role):
-                        st.write(content)
+                        # Fix number formatting to prevent breaking
+                        fixed_content = fix_number_formatting(content)
+                        st.markdown(fixed_content, unsafe_allow_html=True)
             
             # Chat input
             user_question = st.chat_input("Ask a question about the transcript...")
@@ -447,8 +684,8 @@ def main():
                     st.session_state.chat_messages = []
                     st.rerun()
     
-    # Tab 3: Analysis
-    with tab3:
+    # Tab 4: Analysis
+    with tab4:
         st.header("📊 Equity Analysis")
         
         # Check for analysis in session state
@@ -457,13 +694,8 @@ def main():
         else:
             # Show video info if available
             if st.session_state.transcript and hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
-                st.caption(f"📹 {st.session_state.transcript.title}")
-            st.text_area(
-                "Analysis Results",
-                st.session_state.analysis_text,
-                height=600,
-                disabled=True
-            )
+                st.subheader(st.session_state.transcript.title)
+            st.markdown(f'<div class="analysis-text">{st.session_state.analysis_text}</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
