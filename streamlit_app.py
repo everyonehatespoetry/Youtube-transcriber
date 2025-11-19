@@ -27,7 +27,8 @@ from yt2txt.writers.txt_writer import write_txt
 from yt2txt.writers.json_writer import write_json
 from yt2txt.writers.srt_writer import write_srt
 from yt2txt.writers.analysis_writer import write_analysis
-from yt2txt.models import Transcript
+from yt2txt.models import Transcript, Segment
+import json
 
 
 # Page configuration
@@ -112,21 +113,43 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
                 st.session_state.output_dir = output_dir
                 
                 # Check if using cached audio
-                transcript_path = output_dir / "transcript.json"
                 audio_cached = audio_path.exists() and not force
                 if audio_cached:
                     st.info("ℹ️ Using cached audio file - video was previously downloaded")
             
-            # Transcribe
-            with st.spinner("Transcribing audio (this may take a few minutes for long videos)..."):
-                transcript = transcribe_audio(audio_path, video_id, url, metadata, force=force)
-                st.session_state.transcript = transcript
+            # Check if transcript is already cached before transcribing
+            transcript_path = output_dir / "transcript.json"
+            transcript_cached = transcript_path.exists() and not force
+            
+            if transcript_cached:
+                # Load cached transcript
+                st.info("ℹ️ Using cached transcript - loading from previous run")
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 
-                # Check if using cached transcript
-                transcript_cached = transcript_path.exists() and not force
-                if transcript_cached:
-                    st.info("ℹ️ Using cached transcript - no re-transcription needed")
-                else:
+                from yt2txt.models import Segment
+                segments = [
+                    Segment(start=s['start'], end=s['end'], text=s['text'])
+                    for s in data.get('segments', [])
+                ]
+                
+                from yt2txt.models import Transcript
+                transcript = Transcript(
+                    video_id=data.get('video_id', video_id),
+                    url=data.get('url', url),
+                    title=data.get('title'),
+                    channel=data.get('channel'),
+                    duration=data.get('duration'),
+                    language=data.get('language'),
+                    segments=segments
+                )
+                st.session_state.transcript = transcript
+                st.success("✓ Cached transcript loaded")
+            else:
+                # Transcribe (not cached)
+                with st.spinner("Transcribing audio (this may take a few minutes for long videos)..."):
+                    transcript = transcribe_audio(audio_path, video_id, url, metadata, force=force)
+                    st.session_state.transcript = transcript
                     st.success("✓ New transcript created")
             
             # Write transcript files
