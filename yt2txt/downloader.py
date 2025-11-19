@@ -98,9 +98,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         return audio_path, metadata, video_id
     
     # Configure yt-dlp for audio-only m4a download (no ffmpeg required)
-    # We need to completely disable post-processing to avoid ffmpeg dependency
+    # Prefer smaller formats to avoid OpenAI's 25 MB limit
+    # Format selection: prefer smaller files, but ensure m4a format
     ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/best[ext=m4a]/best',
+        'format': 'worstaudio[ext=m4a][filesize<25M]/bestaudio[ext=m4a][filesize<25M]/worstaudio[ext=m4a]/bestaudio[ext=m4a]/best[ext=m4a]/best',
         'outtmpl': str(audio_path.with_suffix('')),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter

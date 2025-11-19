@@ -11,6 +11,55 @@ from yt2txt.config import Config
 from yt2txt.models import Segment, Transcript
 
 
+def _compress_audio(audio_path: Path, max_size_bytes: int) -> Path:
+    """
+    Compress audio file to fit within size limit.
+    Tries to use pydub if available, otherwise returns original.
+    """
+    try:
+        from pydub import AudioSegment
+        
+        # Load audio
+        audio = AudioSegment.from_file(str(audio_path))
+        
+        # Calculate target bitrate to get under limit
+        duration_seconds = len(audio) / 1000.0
+        target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 10  # Leave 10 kbps margin
+        
+        # Don't go below 32 kbps (too low quality)
+        target_bitrate_kbps = max(32, min(target_bitrate_kbps, 128))
+        
+        # Export as compressed m4a
+        compressed_path = audio_path.parent / f"{audio_path.stem}_compressed.m4a"
+        audio.export(
+            str(compressed_path),
+            format="m4a",
+            bitrate=f"{target_bitrate_kbps}k",
+            codec="aac"
+        )
+        
+        # If still too large, try even lower bitrate
+        if compressed_path.stat().st_size > max_size_bytes:
+            target_bitrate_kbps = int((max_size_bytes * 8) / (duration_seconds * 1000)) - 20
+            target_bitrate_kbps = max(32, target_bitrate_kbps)
+            audio.export(
+                str(compressed_path),
+                format="m4a",
+                bitrate=f"{target_bitrate_kbps}k",
+                codec="aac"
+            )
+        
+        return compressed_path
+        
+    except ImportError:
+        # pydub not available, return original (will fail but at least we tried)
+        print("⚠ pydub not available for compression. Install with: pip install pydub")
+        return audio_path
+    except Exception as e:
+        print(f"⚠ Compression failed: {e}. Using original file.")
+        return audio_path
+
+
 def transcribe_audio(
     audio_path: Path,
     video_id: str,
@@ -58,8 +107,19 @@ def transcribe_audio(
     # Validate API key
     Config.validate()
     
+    # Check file size - OpenAI Whisper has a 25 MB limit
+    file_size_bytes = audio_path.stat().st_size
+    file_size_mb = file_size_bytes / (1024 * 1024)
+    max_size_bytes = 25 * 1024 * 1024  # 25 MB in bytes
+    
+    # If file is too large, we need to compress it
+    if file_size_bytes > max_size_bytes:
+        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit. Compressing...")
+        audio_path = _compress_audio(audio_path, max_size_bytes)
+        file_size_mb = audio_path.stat().st_size / (1024 * 1024)
+        print(f"✓ Compressed to {file_size_mb:.1f} MB")
+    
     # Get file size for timeout estimation
-    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
     # Calculate timeout: base 5 minutes + 1 minute per 10MB
     timeout_seconds = 300.0 + (file_size_mb / 10) * 60.0
     timeout_seconds = min(timeout_seconds, 1800.0)  # Cap at 30 minutes
