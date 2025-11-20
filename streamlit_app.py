@@ -346,7 +346,6 @@ def process_video_streamlit(url: str, analyze: bool):
         # Validate configuration first
         with st.spinner("Validating configuration..."):
             Config.validate()
-            st.success("✓ Configuration validated")
         
         # Use persistent output directory for caching (not temp - cache needs to persist!)
         # This allows transcripts to be cached across runs, saving API costs
@@ -361,11 +360,6 @@ def process_video_streamlit(url: str, analyze: bool):
                 audio_path, metadata, video_id = download_audio(url, force=False)
                 output_dir = audio_path.parent
                 st.session_state.output_dir = output_dir
-                
-                # Check if using cached audio
-                audio_cached = audio_path.exists()
-                if audio_cached:
-                    st.info("ℹ️ Using cached audio file - video was previously downloaded")
             
             # Check if transcript is already cached before transcribing
             # Use the same path that transcribe_audio() uses (audio_path.parent)
@@ -385,24 +379,13 @@ def process_video_streamlit(url: str, analyze: bool):
                                 output_dir = transcript_file.parent  # Update output_dir to match found location
                                 st.session_state.output_dir = output_dir
                                 transcript_cached = True
-                                st.info(f"ℹ️ Found cached transcript (folder name may have changed): {transcript_path}")
                                 break
                     except (json.JSONDecodeError, IOError):
                         continue
             
-            # Debug: Show cache status and path
-            if transcript_cached:
-                if not st.session_state.get('_cache_found_shown'):
-                    st.info(f"ℹ️ Found cached transcript at: {transcript_path}")
-                    st.session_state['_cache_found_shown'] = True
-            else:
-                if not transcript_path.exists():
-                    st.info(f"ℹ️ No cached transcript found at: {transcript_path}")
-            
             if transcript_cached:
                 # Load cached transcript (NO API CALL - saves money!)
                 try:
-                    st.info("ℹ️ Using cached transcript - loading from previous run (no API call)")
                     with open(transcript_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                     
@@ -644,8 +627,8 @@ def main():
             # Show download options
             if st.session_state.output_dir and (st.session_state.output_dir / "transcript_with_timestamps.txt").exists():
                 st.subheader("📥 Download Files")
-                # Use tighter columns to bring buttons closer
-                col1, col2, col3 = st.columns([1, 1, 4])
+                # Use very tight columns to bring buttons even closer
+                col1, col2, col3 = st.columns([1, 1, 6])
                 
                 with col1:
                     with open(st.session_state.output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -720,7 +703,7 @@ def main():
     
     # Tab 3: Chat
     with tab3:
-        st.header("💬 Ask Questions About the Transcript")
+        st.header("💬 Ask AI About Your Video")
         
         # Check for transcript in session state
         if st.session_state.transcript is None:

@@ -107,6 +107,90 @@ def _compress_audio(audio_path: Path, max_size_bytes: int) -> Path:
         raise
 
 
+def _speed_up_audio(audio_path: Path, speed_factor: float = 1.25) -> Path:
+    """
+    Speed up audio to reduce file size and transcription cost.
+    
+    Args:
+        audio_path: Path to original audio file
+        speed_factor: Speed multiplier (1.25 = 25% faster)
+        
+    Returns:
+        Path to sped-up audio file
+    """
+    try:
+        from pydub import AudioSegment
+        
+        print(f"  Speeding up audio to {speed_factor}x...")
+        
+        # Load audio
+        audio = AudioSegment.from_file(str(audio_path))
+        
+        # Speed up by changing frame rate
+        # This is the most efficient method and doesn't require ffmpeg
+        sped_up_audio = audio._spawn(audio.raw_data, overrides={
+            "frame_rate": int(audio.frame_rate * speed_factor)
+        })
+        # Convert back to standard frame rate to maintain compatibility
+        sped_up_audio = sped_up_audio.set_frame_rate(audio.frame_rate)
+        
+        # Save sped-up audio
+        sped_up_path = audio_path.parent / f"{audio_path.stem}_{speed_factor}x.m4a"
+        sped_up_audio.export(str(sped_up_path), format="ipod")  # ipod format = m4a
+        
+        original_size = audio_path.stat().st_size / (1024 * 1024)
+        new_size = sped_up_path.stat().st_size / (1024 * 1024)
+        print(f"  ✓ Sped up: {original_size:.1f} MB → {new_size:.1f} MB")
+        
+        return sped_up_path
+        
+    except Exception as e:
+        print(f"  ⚠ Speed adjustment failed: {e}")
+        print(f"  Continuing with original audio...")
+        return audio_path
+
+
+def _chunk_audio_file(audio_path: Path, max_chunk_size_mb: int = 20) -> list[Path]:
+    """
+    Split audio file into chunks based on file size.
+    Uses simple byte-based splitting which works for m4a files.
+    
+    Args:
+        audio_path: Path to audio file
+        max_chunk_size_mb: Maximum size per chunk in MB
+        
+    Returns:
+        List of paths to chunk files
+    """
+    file_size = audio_path.stat().st_size
+    max_chunk_bytes = max_chunk_size_mb * 1024 * 1024
+    
+    # Calculate number of chunks needed
+    num_chunks = (file_size + max_chunk_bytes - 1) // max_chunk_bytes
+    
+    if num_chunks == 1:
+        return [audio_path]
+    
+    print(f"  Splitting audio into {num_chunks} chunks...")
+    
+    chunk_paths = []
+    with open(audio_path, 'rb') as f:
+        for i in range(num_chunks):
+            chunk_data = f.read(max_chunk_bytes)
+            if not chunk_data:
+                break
+            
+            chunk_path = audio_path.parent / f"{audio_path.stem}_chunk{i+1}.m4a"
+            with open(chunk_path, 'wb') as chunk_file:
+                chunk_file.write(chunk_data)
+            
+            chunk_size_mb = len(chunk_data) / (1024 * 1024)
+            print(f"    Chunk {i+1}/{num_chunks}: {chunk_size_mb:.1f} MB")
+            chunk_paths.append(chunk_path)
+    
+    return chunk_paths
+
+
 def transcribe_audio(
     audio_path: Path,
     video_id: str,
@@ -154,35 +238,23 @@ def transcribe_audio(
     # Validate API key
     Config.validate()
     
-    # Check file size - OpenAI Whisper has a 25 MB limit
+    # STEP 1: Always speed up audio to 1.25x for cost savings
+    SPEED_FACTOR = 1.25
+    print(f"Optimizing audio (1.25x speed for 20% cost savings)...")
+    audio_path = _speed_up_audio(audio_path, SPEED_FACTOR)
+    
+    # Check file size after speed-up - OpenAI Whisper has a 25 MB limit
     file_size_bytes = audio_path.stat().st_size
     file_size_mb = file_size_bytes / (1024 * 1024)
     max_size_bytes = 25 * 1024 * 1024  # 25 MB in bytes
     
-    # If file is too large, we need to compress it
+    # STEP 2: If still too large after speed-up, chunk it
+    chunk_paths = [audio_path]
     if file_size_bytes > max_size_bytes:
-        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit. Attempting compression...")
-        try:
-            audio_path = _compress_audio(audio_path, max_size_bytes)
-            file_size_mb = audio_path.stat().st_size / (1024 * 1024)
-            if audio_path.stat().st_size > max_size_bytes:
-                raise ValueError(f"Compressed file still too large: {file_size_mb:.1f} MB")
-            print(f"✓ Compressed to {file_size_mb:.1f} MB")
-        except Exception as e:
-            # Check if it's an ffmpeg issue
-            error_str = str(e).lower()
-            if 'ffmpeg' in error_str or 'not found' in error_str:
-                error_msg = (
-                    f"File too large ({file_size_mb:.1f} MB) and compression requires ffmpeg, "
-                    f"which is not available on this system. "
-                    f"Please try a shorter video (under ~20 minutes) or contact support."
-                )
-            else:
-                error_msg = (
-                    f"File too large ({file_size_mb:.1f} MB) and compression failed: {str(e)}. "
-                    f"Please try a shorter video (under ~20 minutes)."
-                )
-            raise RuntimeError(error_msg) from e
+        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit after speed-up.")
+        print(f"  Splitting into chunks...")
+        chunk_paths = _chunk_audio_file(audio_path, max_chunk_size_mb=20)
+        print(f"  ✓ Split into {len(chunk_paths)} chunks")
     
     # Get file size for timeout estimation
     # Calculate timeout: base 5 minutes + 1 minute per 10MB
@@ -195,115 +267,101 @@ def transcribe_audio(
         timeout=timeout_seconds
     )
     
-    # Transcribe with retries
-    last_error = None
-    for attempt in range(Config.MAX_RETRIES + 1):
-        try:
-            if attempt > 0:
-                print(f"Transcribing audio (attempt {attempt + 1}/{Config.MAX_RETRIES + 1})...")
-            else:
-                print("Transcribing audio...")
-            
-            # Show file size info
-            file_size_mb = audio_path.stat().st_size / (1024 * 1024)
-            print(f"  File size: {file_size_mb:.1f} MB")
-            if file_size_mb > 20:
-                print(f"  Note: Large file - upload and processing may take several minutes...")
-            
-            # Use a simpler progress indicator that doesn't fake progress
-            print("  Uploading and processing (this may take a while for large files)...")
-            
-            # Reopen file for each attempt to ensure it's fresh
-            with open(audio_path, 'rb') as audio_file:
-                response = client.audio.transcriptions.create(
-                    model=Config.MODEL,
-                    file=audio_file,
-                    response_format="verbose_json",
-                    language=None,  # Auto-detect
-                )
-            
-            # Parse response - verbose_json returns a dict, but SDK might wrap it
-            # Convert to dict if it's a model object
-            if hasattr(response, 'model_dump'):
-                response_dict = response.model_dump()
-            elif hasattr(response, 'dict'):
-                response_dict = response.dict()
-            elif isinstance(response, dict):
-                response_dict = response
-            else:
-                # Try to access as attributes
-                response_dict = {
-                    'text': getattr(response, 'text', ''),
-                    'language': getattr(response, 'language', None),
-                    'duration': getattr(response, 'duration', None),
-                    'segments': getattr(response, 'segments', [])
-                }
-            
-            # Extract segments and language
-            segments_data = response_dict.get('segments', [])
-            detected_language = response_dict.get('language')
-            
-            # If no segments but we have text, create a single segment
-            if not segments_data and response_dict.get('text'):
-                # Create a single segment with the full text
-                duration = response_dict.get('duration') or metadata.get('duration', 0)
-                segments_data = [{
-                    'start': 0.0,
-                    'end': float(duration) if duration else 0.0,
-                    'text': response_dict.get('text', '')
-                }]
-            
-            segments = [
-                Segment(
-                    start=float(seg.get('start', 0) if isinstance(seg, dict) else getattr(seg, 'start', 0)),
-                    end=float(seg.get('end', 0) if isinstance(seg, dict) else getattr(seg, 'end', 0)),
-                    text=(seg.get('text', '') if isinstance(seg, dict) else getattr(seg, 'text', '')).strip()
-                )
-                for seg in segments_data
-            ]
-            
-            transcript = Transcript(
-                video_id=video_id,
-                url=url,
-                title=metadata.get('title'),
-                channel=metadata.get('channel'),
-                duration=metadata.get('duration'),
-                language=detected_language,
-                segments=segments
-            )
-            
-            print(f"✓ Transcription complete: {len(segments)} segments")
-            return transcript
-            
-        except RateLimitError as e:
-            last_error = e
-            if attempt < Config.MAX_RETRIES:
-                wait_time = 2 ** attempt  # Exponential backoff
-                print(f"Rate limit hit. Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
-                # Continue to next iteration to retry
-                continue
-            else:
-                raise RuntimeError(
-                    f"Rate limit exceeded after {Config.MAX_RETRIES + 1} attempts. "
-                    f"Please try again later."
-                ) from e
+    # STEP 3: Transcribe each chunk
+    all_segments = []
+    detected_language = None
+    
+    for chunk_idx, chunk_path in enumerate(chunk_paths):
+        chunk_num = chunk_idx + 1
+        total_chunks = len(chunk_paths)
+        
+        if total_chunks > 1:
+            print(f"Transcribing chunk {chunk_num}/{total_chunks}...")
+        else:
+            print("Transcribing audio...")
+        
+        # Transcribe with retries
+        last_error = None
+        for attempt in range(Config.MAX_RETRIES + 1):
+            try:
+                if attempt > 0:
+                    print(f"  Attempt {attempt + 1}/{Config.MAX_RETRIES + 1}...")
                 
-        except APIConnectionError as e:
-            last_error = e
-            if attempt < Config.MAX_RETRIES:
-                wait_time = 2 ** attempt
-                print(f"Connection error. Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
-                # Continue to next iteration to retry
-                continue
-            else:
-                raise RuntimeError(
-                    f"Connection error after {Config.MAX_RETRIES + 1} attempts: {str(e)}"
-                ) from e
+                # Show file size info
+                chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
+                print(f"  File size: {chunk_size_mb:.1f} MB")
                 
-        except APIError as e:
-            error_msg = str(e)
+                # Transcribe this chunk
+                with open(chunk_path, 'rb') as audio_file:
+                    response = client.audio.transcriptions.create(
+                        model=Config.MODEL,
+                        file=audio_file,
+                        response_format="verbose_json",
+                        language=None,  # Auto-detect
+                    )
+                
+                # Parse response
+                if hasattr(response, 'model_dump'):
+                    response_dict = response.model_dump()
+                elif hasattr(response, 'dict'):
+                    response_dict = response.dict()
+                elif isinstance(response, dict):
+                    response_dict = response
+                else:
+                    response_dict = {
+                        'text': getattr(response, 'text', ''),
+                        'language': getattr(response, 'language', None),
+                        'duration': getattr(response, 'duration', None),
+                        'segments': getattr(response, 'segments', [])
+                    }
+                
+                # Extract segments
+                segments_data = response_dict.get('segments', [])
+                if not detected_language:
+                    detected_language = response_dict.get('language')
+                
+                # If no segments but we have text, create a single segment
+                if not segments_data and response_dict.get('text'):
+                    duration = response_dict.get('duration') or metadata.get('duration', 0)
+                    segments_data = [{
+                        'start': 0.0,
+                        'end': float(duration) if duration else 0.0,
+                        'text': response_dict.get('text', '')
+                    }]
+                
+                # Add segments from this chunk
+                for seg in segments_data:
+                    all_segments.append(seg)
+                
+                print(f"  ✓ Chunk {chunk_num} complete: {len(segments_data)} segments")
+                break  # Success, exit retry loop
+                
+            except RateLimitError as e:
+                last_error = e
+                if attempt < Config.MAX_RETRIES:
+                    wait_time = 2 ** attempt
+                    print(f"  Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Rate limit exceeded after {Config.MAX_RETRIES + 1} attempts."
+                    ) from e
+                    
+            except APIConnectionError as e:
+                last_error = e
+                if attempt < Config.MAX_RETRIES:
+                    wait_time = 2 ** attempt
+                    print(f"  Connection error. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Connection error after {Config.MAX_RETRIES + 1} attempts: {str(e)}"
+                    ) from e
+                    
+            except APIError as e:
+                error_msg = str(e)
             
             # Check if it's an HTML response (502/503 gateway errors)
             is_html_error = "<!DOCTYPE html>" in error_msg or "<html" in error_msg.lower()
@@ -339,6 +397,28 @@ def transcribe_audio(
         except Exception as e:
             raise RuntimeError(f"Unexpected error during transcription: {str(e)}") from e
     
-    # Should not reach here, but just in case
-    raise RuntimeError(f"Failed to transcribe after {Config.MAX_RETRIES + 1} attempts") from last_error
+    # STEP 4: Process all segments and correct timestamps
+    # Multiply all timestamps by SPEED_FACTOR to get original video times
+    print(f"Processing {len(all_segments)} total segments...")
+    segments = [
+        Segment(
+            start=float(seg.get('start', 0) if isinstance(seg, dict) else getattr(seg, 'start', 0)) * SPEED_FACTOR,
+            end=float(seg.get('end', 0) if isinstance(seg, dict) else getattr(seg, 'end', 0)) * SPEED_FACTOR,
+            text=(seg.get('text', '') if isinstance(seg, dict) else getattr(seg, 'text', '')).strip()
+        )
+        for seg in all_segments
+    ]
+    
+    transcript = Transcript(
+        video_id=video_id,
+        url=url,
+        title=metadata.get('title'),
+        channel=metadata.get('channel'),
+        duration=metadata.get('duration'),
+        language=detected_language,
+        segments=segments
+    )
+    
+    print(f"✓ Transcription complete: {len(segments)} segments (timestamps corrected for 1.25x speed)")
+    return transcript
 
