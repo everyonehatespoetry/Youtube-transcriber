@@ -611,32 +611,6 @@ def main():
                     if success:
                         st.success("✅ Video processed successfully!")
                         
-                        # Show download options
-                        # Show download options
-                        st.subheader("📥 Download Files")
-                        
-                        col1, col2, col3 = st.columns([1, 1, 2])
-                        
-                        with col1:
-                            with open(output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
-                                st.download_button(
-                                    "📄 Download TXT",
-                                    f.read(),
-                                    file_name="transcript.txt",
-                                    mime="text/plain",
-                                    key="download_txt_after_process"
-                                )
-                        
-                        if st.session_state.analysis_text:
-                            with col2:
-                                st.download_button(
-                                    "📊 Download Analysis",
-                                    st.session_state.analysis_text,
-                                    file_name="equity_analysis.txt",
-                                    mime="text/plain",
-                                    key="download_analysis_after_process"
-                                )
-                        
                         # Store current video URL
                         st.session_state.current_video_url = url
                         
@@ -670,7 +644,8 @@ def main():
             # Show download options
             if st.session_state.output_dir and (st.session_state.output_dir / "transcript_with_timestamps.txt").exists():
                 st.subheader("📥 Download Files")
-                col1, col2, col3 = st.columns([1, 1, 2])
+                # Use tighter columns to bring buttons closer
+                col1, col2, col3 = st.columns([1, 1, 4])
                 
                 with col1:
                     with open(st.session_state.output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -754,7 +729,7 @@ def main():
             # Show video info if available
             if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
                 st.caption(f"📹 {st.session_state.transcript.title}")
-            st.success(f"✓ Transcript loaded ({len(st.session_state.transcript.segments)} segments)")
+            st.success("✓ Video loaded")
             
             # Display chat history
             if st.session_state.chat_messages:
@@ -766,7 +741,7 @@ def main():
                         st.markdown(fixed_content, unsafe_allow_html=True)
             
             # Chat input
-            user_question = st.chat_input("Ask a question about the transcript...")
+            user_question = st.chat_input("Ask your video for a recap, or any other question!")
             
             if user_question:
                 # Add user message to history
@@ -834,14 +809,50 @@ def main():
     with tab4:
         st.header("📊 Equity Analysis")
         
-        # Check for analysis in session state
-        if st.session_state.analysis_text is None or st.session_state.analysis_text == "":
-            st.info("👆 Run equity analysis in the 'Transcribe' tab (check 'Run equity analysis' option) to see the analysis here.")
+        # Check if transcript is available
+        if st.session_state.transcript is None:
+            st.info("👆 First transcribe a video in the 'Transcribe' tab to run equity analysis.")
         else:
             # Show video info if available
-            if st.session_state.transcript and hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
-                st.subheader(st.session_state.transcript.title)
-            st.markdown(f'<div class="analysis-text">{st.session_state.analysis_text}</div>', unsafe_allow_html=True)
+            if hasattr(st.session_state.transcript, 'title') and st.session_state.transcript.title:
+                st.caption(f"📹 {st.session_state.transcript.title}")
+            
+            # Check if analysis already exists
+            if st.session_state.analysis_text:
+                # Display existing analysis
+                st.markdown(f'<div class="analysis-text">{st.session_state.analysis_text}</div>', unsafe_allow_html=True)
+            else:
+                # Prompt user to run analysis
+                st.info("Would you like to run a stock-specific analysis prompt?")
+                st.caption("This will use GPT to analyze the transcript from an equity research perspective.")
+                
+                if st.button("📊 Run Equity Analysis", type="primary", use_container_width=False):
+                    # Check if cached analysis exists
+                    if st.session_state.output_dir:
+                        analysis_path = st.session_state.output_dir / "equity_analysis.txt"
+                        if analysis_path.exists():
+                            # Load cached analysis
+                            with st.spinner("Loading cached analysis..."):
+                                with open(analysis_path, 'r', encoding='utf-8') as f:
+                                    st.session_state.analysis_text = f.read()
+                                st.success("✓ Analysis loaded from cache!")
+                                st.rerun()
+                        else:
+                            # Run new analysis
+                            with st.spinner("Analyzing transcript with GPT (this may take a minute)..."):
+                                try:
+                                    from yt2txt.analyzer import analyze_transcript
+                                    from yt2txt.writers.analysis_writer import write_analysis
+                                    
+                                    analysis_text = analyze_transcript(st.session_state.transcript, st.session_state.output_dir, force=False)
+                                    write_analysis(analysis_text, analysis_path)
+                                    st.session_state.analysis_text = analysis_text
+                                    st.success("✓ Analysis complete!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"⚠ Error analyzing transcript: {str(e)}")
+                    else:
+                        st.error("Output directory not found. Please re-process the video.")
 
 
 if __name__ == "__main__":
