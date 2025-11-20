@@ -119,8 +119,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'writethumbnail': False,
         'writesubtitles': False,
         'writeautomaticsub': False,
-        # Use android client to bypass bot detection (most reliable method)
-        'extractor_args': {'youtube': {'player_client': ['android']}},
+        # Use multiple player clients to bypass bot detection (most reliable method)
+        # Try android first, then ios, then web as fallbacks
+        'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
     }
     
     # Monkey-patch to prevent post-processors from running
