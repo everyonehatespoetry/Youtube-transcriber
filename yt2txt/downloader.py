@@ -259,7 +259,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                     downloaded_file = potential_file
                 else:
                     # Look for any audio file in the directory
-                    audio_files = list(output_dir.glob("*.m4a")) + list(output_dir.glob("*.m4v"))
+                    audio_files = list(output_dir.glob("*.m4a")) + list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.webm")) + list(output_dir.glob("*.m4v"))
                     if audio_files:
                         downloaded_file = audio_files[0]
                     else:
@@ -271,7 +271,13 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             if downloaded_file and downloaded_file != audio_path:
                 # Make sure the target directory exists
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
-                downloaded_file.rename(audio_path)
+                
+                # Preserve the actual file extension instead of forcing .m4a
+                actual_extension = downloaded_file.suffix if downloaded_file.suffix else '.m4a'
+                final_audio_path = audio_path.parent / f"audio{actual_extension}"
+                
+                downloaded_file.rename(final_audio_path)
+                audio_path = final_audio_path  # Update audio_path to reflect actual file
                 print(f"✓ Renamed audio file to: {audio_path.name}")
             elif not audio_path.exists():
                 # If we still don't have the file, that's a real problem
