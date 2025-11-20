@@ -121,7 +121,17 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'writeautomaticsub': False,
         # Use multiple player clients to bypass bot detection (most reliable method)
         # Try android first, then ios, then web as fallbacks
-        'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
+        'extractor_args': {'youtube': {
+            'player_client': ['android', 'ios', 'web'],
+            'player_skip': ['webpage', 'configs'],
+        }},
+        # Additional bot bypass options
+        'http_headers': {
+            'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
     }
     
     # Monkey-patch to prevent post-processors from running
