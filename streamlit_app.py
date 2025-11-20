@@ -340,7 +340,7 @@ def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata
         raise e
 
 
-def process_video_streamlit(url: str, analyze: bool, force: bool = False):
+def process_video_streamlit(url: str, analyze: bool):
     """Process video with Streamlit progress indicators."""
     try:
         # Validate configuration first
@@ -358,22 +358,22 @@ def process_video_streamlit(url: str, analyze: bool, force: bool = False):
         try:
             # Download audio
             with st.spinner("Downloading audio from YouTube..."):
-                audio_path, metadata, video_id = download_audio(url, force=force)
+                audio_path, metadata, video_id = download_audio(url, force=False)
                 output_dir = audio_path.parent
                 st.session_state.output_dir = output_dir
                 
                 # Check if using cached audio
-                audio_cached = audio_path.exists() and not force
+                audio_cached = audio_path.exists()
                 if audio_cached:
                     st.info("ℹ️ Using cached audio file - video was previously downloaded")
             
             # Check if transcript is already cached before transcribing
             # Use the same path that transcribe_audio() uses (audio_path.parent)
             transcript_path = output_dir / "transcript.json"  # output_dir = audio_path.parent
-            transcript_cached = transcript_path.exists() and not force
+            transcript_cached = transcript_path.exists()
             
             # If not found at expected path, search by video_id in case folder name changed
-            if not transcript_cached and not force and persistent_out_dir.exists():
+            if not transcript_cached and persistent_out_dir.exists():
                 # Search for transcript.json files that contain this video_id
                 for transcript_file in persistent_out_dir.rglob("transcript.json"):
                     try:
@@ -396,9 +396,7 @@ def process_video_streamlit(url: str, analyze: bool, force: bool = False):
                     st.info(f"ℹ️ Found cached transcript at: {transcript_path}")
                     st.session_state['_cache_found_shown'] = True
             else:
-                if force:
-                    st.info("ℹ️ Force reprocess enabled - will re-transcribe")
-                elif not transcript_path.exists():
+                if not transcript_path.exists():
                     st.info(f"ℹ️ No cached transcript found at: {transcript_path}")
             
             if transcript_cached:
@@ -433,7 +431,7 @@ def process_video_streamlit(url: str, analyze: bool, force: bool = False):
                 # Transcribe (not cached or cache load failed)
                 # transcribe_audio() also checks for cache internally, so it won't re-transcribe if cached
                 # Use progress bar wrapper for better user feedback
-                transcript = transcribe_with_progress(audio_path, video_id, url, metadata, force=force)
+                transcript = transcribe_with_progress(audio_path, video_id, url, metadata, force=False)
                 st.session_state.transcript = transcript
                 st.success("✓ Transcript ready")
             
@@ -446,7 +444,7 @@ def process_video_streamlit(url: str, analyze: bool, force: bool = False):
             # Analyze transcript if requested
             if analyze:
                 analysis_path = output_dir / "equity_analysis.txt"
-                if analysis_path.exists() and not force:
+                if analysis_path.exists():
                     st.info("ℹ️ Using cached analysis - loading from previous run")
                     with open(analysis_path, 'r', encoding='utf-8') as f:
                         analysis_text = f.read()
@@ -455,7 +453,7 @@ def process_video_streamlit(url: str, analyze: bool, force: bool = False):
                 else:
                     with st.spinner("Analyzing transcript with GPT (this may take a minute)..."):
                         try:
-                            analysis_text = analyze_transcript(transcript, output_dir, force=force)
+                            analysis_text = analyze_transcript(transcript, output_dir, force=False)
                             write_analysis(analysis_text, output_dir / "equity_analysis.txt")
                             st.session_state.analysis_text = analysis_text
                             st.success("✓ Analysis complete!")
@@ -509,10 +507,6 @@ def main():
         
         st.subheader("Options")
         analyze = st.checkbox("Run equity analysis", value=True)
-        
-        # Add force reprocess option
-        st.divider()
-        force_reprocess = st.checkbox("🔄 Force reprocess (ignore cache)", value=False, help="Check this to re-download and re-transcribe even if already processed")
         
         # Prior Transcript History
         st.divider()
@@ -608,21 +602,20 @@ def main():
                 status_container = st.container()
                 with status_container:
                     st.info("🔄 Starting video processing... Please wait.")
-                    if force_reprocess:
-                        st.warning("⚠️ Force reprocess enabled - will re-download and re-transcribe")
                 
                 st.session_state.processing = True
                 try:
-                    success, output_dir = process_video_streamlit(url, analyze, force_reprocess)
+                    success, output_dir = process_video_streamlit(url, analyze)
                     st.session_state.processing = False
                     
                     if success:
                         st.success("✅ Video processed successfully!")
                         
                         # Show download options
+                        # Show download options
                         st.subheader("📥 Download Files")
                         
-                        col1, col2 = st.columns(2)
+                        col1, col2, col3 = st.columns([1, 1, 2])
                         
                         with col1:
                             with open(output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -677,7 +670,7 @@ def main():
             # Show download options
             if st.session_state.output_dir and (st.session_state.output_dir / "transcript_with_timestamps.txt").exists():
                 st.subheader("📥 Download Files")
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns([1, 1, 2])
                 
                 with col1:
                     with open(st.session_state.output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -699,15 +692,7 @@ def main():
                             key="download_analysis_current"
                         )
             
-            # Show transcript preview
-            st.subheader("📝 Transcript Preview")
-            transcript_text = "\n".join(
-                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
-                for seg in st.session_state.transcript.segments[:20]
-            )
-            if len(st.session_state.transcript.segments) > 20:
-                transcript_text += f"\n\n... and {len(st.session_state.transcript.segments) - 20} more segments"
-            st.text_area("", transcript_text, height=300, disabled=True, key="transcribe_preview")
+
     
     # Tab 2: Full Transcript
     with tab2:
@@ -746,7 +731,9 @@ def main():
             # Display formatted transcript if available, otherwise raw segments
             if st.session_state.formatted_transcript:
                 st.info("✓ Viewing formatted transcript")
-                st.markdown(f'<div class="transcript-text">{st.session_state.formatted_transcript}</div>', unsafe_allow_html=True)
+                # Escape dollar signs to prevent Streamlit from interpreting them as LaTeX
+                safe_text = st.session_state.formatted_transcript.replace("$", "\\$")
+                st.markdown(f'<div class="transcript-text">{safe_text}</div>', unsafe_allow_html=True)
             else:
                 # Display full transcript with better formatting
                 transcript_text = "\n\n".join(
