@@ -108,7 +108,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
         'extract_flat': False,
-        'postprocessors': [],  # Disable all post-processing (no ffmpeg needed)
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'm4a',
+        }],
         'nopostoverwrites': True,
         'postprocessor_args': {},  # No post-processor arguments
         'keepvideo': False,
@@ -140,29 +143,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         # Only use android client if NOT using cookies (can conflict)
         ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
     
-    # Monkey-patch to prevent post-processors from running
-    # This is a workaround for yt-dlp trying to run FixupM4a even with empty postprocessors
-    import yt_dlp.postprocessor
-    original_run = yt_dlp.postprocessor.PostProcessor.run
-    
-    def noop_run(self, information):
-        """No-op post-processor that does nothing."""
-        return [], information
-    
-    # Temporarily replace the run method
-    yt_dlp.postprocessor.PostProcessor.run = noop_run
-    
-    # Also patch FixupM4a specifically
-    try:
-        from yt_dlp.postprocessor import FixupM4a
-        original_fixup_run = FixupM4a.run
-        FixupM4a.run = noop_run
-        fixup_patched = True
-    except:
-        fixup_patched = False
-    
     metadata = {}
-    postprocessor_patched = True
     
     # Track downloaded file via progress hook and immediately save it
     saved_file_path = None
@@ -311,13 +292,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                     pass
         else:
             raise RuntimeError(f"Failed to download audio: {str(e)}") from e
-    finally:
-        # Restore original post-processor run method
-        if postprocessor_patched:
-            yt_dlp.postprocessor.PostProcessor.run = original_run
-        if fixup_patched:
-            from yt_dlp.postprocessor import FixupM4a
-            FixupM4a.run = original_fixup_run
     
     return audio_path, metadata, video_id
+
 
