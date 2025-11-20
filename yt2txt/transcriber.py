@@ -152,7 +152,7 @@ def _speed_up_audio(audio_path: Path, speed_factor: float = 1.25) -> Path:
 
 def _chunk_audio_file(audio_path: Path, max_chunk_duration_minutes: int = 10) -> list[Path]:
     """
-    Split audio file into time-based chunks using pydub.
+    Split audio file into time-based chunks using ffmpeg directly.
     Creates valid audio files that OpenAI can process.
     
     Args:
@@ -163,19 +163,27 @@ def _chunk_audio_file(audio_path: Path, max_chunk_duration_minutes: int = 10) ->
         List of paths to chunk files
     """
     try:
-        from pydub import AudioSegment
+        import subprocess
+        import json
         
-        print(f"  Loading audio file for chunking...")
+        print(f"  Analyzing audio file...")
         
-        # Load the entire audio file
-        audio = AudioSegment.from_file(str(audio_path))
+        # Get audio duration using ffprobe
+        probe_cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            str(audio_path)
+        ]
         
-        # Calculate chunk duration in milliseconds
-        chunk_duration_ms = max_chunk_duration_minutes * 60 * 1000
-        total_duration_ms = len(audio)
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+        probe_data = json.loads(result.stdout)
+        total_duration = float(probe_data['format']['duration'])
         
         # Calculate number of chunks needed
-        num_chunks = (total_duration_ms + chunk_duration_ms - 1) // chunk_duration_ms
+        chunk_duration_seconds = max_chunk_duration_minutes * 60
+        num_chunks = int((total_duration + chunk_duration_seconds - 1) // chunk_duration_seconds)
         
         if num_chunks == 1:
             return [audio_path]
@@ -184,26 +192,38 @@ def _chunk_audio_file(audio_path: Path, max_chunk_duration_minutes: int = 10) ->
         
         chunk_paths = []
         for i in range(num_chunks):
-            start_ms = i * chunk_duration_ms
-            end_ms = min((i + 1) * chunk_duration_ms, total_duration_ms)
+            start_time = i * chunk_duration_seconds
             
-            # Extract chunk
-            chunk = audio[start_ms:end_ms]
-            
-            # Save chunk as valid m4a file
             chunk_path = audio_path.parent / f"{audio_path.stem}_chunk{i+1}.m4a"
-            chunk.export(str(chunk_path), format="ipod")  # ipod = m4a format
             
-            chunk_duration_min = (end_ms - start_ms) / (60 * 1000)
+            # Use ffmpeg to extract chunk
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-i', str(audio_path),
+                '-ss', str(start_time),
+                '-t', str(chunk_duration_seconds),
+                '-c', 'copy',  # Copy codec (no re-encoding)
+                '-y',  # Overwrite output file
+                str(chunk_path)
+            ]
+            
+            subprocess.run(ffmpeg_cmd, capture_output=True, check=True)
+            
             chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
-            print(f"    Chunk {i+1}/{num_chunks}: {chunk_duration_min:.1f} min, {chunk_size_mb:.1f} MB")
+            print(f"    Chunk {i+1}/{num_chunks}: {chunk_size_mb:.1f} MB")
             chunk_paths.append(chunk_path)
         
         return chunk_paths
         
+    except subprocess.CalledProcessError as e:
+        print(f"  ⚠ ffmpeg command failed: {e}")
+        print(f"  stderr: {e.stderr if hasattr(e, 'stderr') else 'N/A'}")
+        raise RuntimeError(
+            f"Failed to chunk audio using ffmpeg: {str(e)}. "
+            f"Make sure ffmpeg is installed on the system."
+        ) from e
     except Exception as e:
         print(f"  ⚠ Audio chunking failed: {e}")
-        print(f"  This may be due to missing ffmpeg or pydub issues.")
         raise RuntimeError(
             f"Failed to chunk audio file: {str(e)}. "
             f"Make sure ffmpeg is installed on the system."
