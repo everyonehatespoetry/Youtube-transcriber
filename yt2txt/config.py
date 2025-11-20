@@ -19,6 +19,10 @@ class Config:
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
     OUT_DIR: Path = Path(os.getenv("OUT_DIR", "./out")).resolve()
     
+    # YouTube cookies for bypassing bot detection (optional)
+    # Set to path of cookies.txt file exported from browser
+    YOUTUBE_COOKIES_TXT: str = os.getenv("YOUTUBE_COOKIES_TXT", "")
+    
     @classmethod
     def validate(cls) -> None:
         """Validate that required configuration is present."""

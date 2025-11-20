@@ -1,5 +1,6 @@
 """YouTube audio downloader using yt-dlp."""
 
+import os
 import re
 import json
 import shutil
@@ -117,11 +118,27 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         'prefer_insecure': False,
         # Try to prevent FixupM4a from running
         'writethumbnail': False,
-        'writesubtitles': False,
         'writeautomaticsub': False,
         # Use android client to bypass bot detection (most reliable method)
         'extractor_args': {'youtube': {'player_client': ['android']}},
     }
+    
+    # Add cookies if provided (for bypassing YouTube bot detection)
+    # Support both file path and direct content from environment
+    cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT", "")
+    cookies_path = Config.YOUTUBE_COOKIES_TXT
+    
+    if cookies_content:
+        # Write cookies content to temporary file
+        import tempfile
+        temp_cookies = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        temp_cookies.write(cookies_content)
+        temp_cookies.close()
+        ydl_opts['cookiefile'] = temp_cookies.name
+        print(f"Using YouTube cookies from environment variable")
+    elif cookies_path and Path(cookies_path).exists():
+        ydl_opts['cookiefile'] = cookies_path
+        print(f"Using YouTube cookies from: {cookies_path}")
     
     # Monkey-patch to prevent post-processors from running
     # This is a workaround for yt-dlp trying to run FixupM4a even with empty postprocessors
