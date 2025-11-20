@@ -104,18 +104,17 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         # Download audio in OpenAI-compatible format
         # Prefer m4a/mp4/webm which are all supported by OpenAI Whisper
         'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio',
-        'outtmpl': str(audio_path.with_suffix('')),
+        'outtmpl': str(audio_path),  # Include full path with .m4a extension
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
         'extract_flat': False,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'm4a',
-        }],
+        'postprocessors': [],  # No postprocessors - download as-is
         'nopostoverwrites': True,
-        'postprocessor_args': {},  # No post-processor arguments
+        'postprocessor_args': {},
         'keepvideo': False,
         'noplaylist': True,
+        # Prefer formats that don't need conversion
+        'prefer_free_formats': True,
         # Disable automatic post-processor selection
         'prefer_insecure': False,
         # Try to prevent FixupM4a from running
@@ -253,16 +252,44 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                 # Make sure the target directory exists
                 audio_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # Preserve the actual file extension instead of forcing .m4a
-                actual_extension = downloaded_file.suffix if downloaded_file.suffix else '.m4a'
+                # Detect actual file extension
+                actual_extension = downloaded_file.suffix if downloaded_file.suffix else ''
+                
+                # If no extension, try to detect from file content
+                if not actual_extension:
+                    import mimetypes
+                    mime_type, _ = mimetypes.guess_type(str(downloaded_file))
+                    if mime_type:
+                        ext_map = {
+                            'audio/mp4': '.m4a',
+                            'video/mp4': '.mp4',
+                            'audio/webm': '.webm',
+                            'video/webm': '.webm',
+                        }
+                        actual_extension = ext_map.get(mime_type, '.m4a')
+                    else:
+                        actual_extension = '.m4a'  # Default fallback
+                
+                # Ensure extension is OpenAI-compatible
+                if actual_extension not in ['.m4a', '.mp4', '.webm', '.mp3', '.wav', '.flac', '.ogg']:
+                    actual_extension = '.m4a'  # Force to m4a if unsupported
+                
                 final_audio_path = audio_path.parent / f"audio{actual_extension}"
                 
                 downloaded_file.rename(final_audio_path)
                 audio_path = final_audio_path  # Update audio_path to reflect actual file
-                print(f"✓ Renamed audio file to: {audio_path.name}")
+                print(f"✓ Audio file saved as: {audio_path.name}")
             elif not audio_path.exists():
-                # If we still don't have the file, that's a real problem
-                raise RuntimeError("Audio file was not downloaded successfully")
+                # Check if file exists with different extension
+                for ext in ['.m4a', '.mp4', '.webm', '.mp3']:
+                    potential_path = audio_path.parent / f"audio{ext}"
+                    if potential_path.exists():
+                        audio_path = potential_path
+                        print(f"✓ Found audio file: {audio_path.name}")
+                        break
+                else:
+                    # If we still don't have the file, that's a real problem
+                    raise RuntimeError("Audio file was not downloaded successfully")
             
             # Save metadata
             with open(meta_path, 'w', encoding='utf-8') as f:
