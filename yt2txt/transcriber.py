@@ -238,20 +238,22 @@ def transcribe_audio(
     # Validate API key
     Config.validate()
     
-    # STEP 1: Always speed up audio to 1.25x for cost savings
-    SPEED_FACTOR = 1.25
-    print(f"Optimizing audio (1.25x speed for 20% cost savings)...")
-    audio_path = _speed_up_audio(audio_path, SPEED_FACTOR)
+    # STEP 1: Speed adjustment disabled due to format compatibility issues
+    # The pydub speed adjustment creates files that OpenAI doesn't accept
+    # SPEED_FACTOR = 1.25
+    # print(f"Optimizing audio (1.25x speed for 20% cost savings)...")
+    # audio_path = _speed_up_audio(audio_path, SPEED_FACTOR)
+    SPEED_FACTOR = 1.0  # No speed adjustment
     
-    # Check file size after speed-up - OpenAI Whisper has a 25 MB limit
+    # Check file size - OpenAI Whisper has a 25 MB limit
     file_size_bytes = audio_path.stat().st_size
     file_size_mb = file_size_bytes / (1024 * 1024)
     max_size_bytes = 25 * 1024 * 1024  # 25 MB in bytes
     
-    # STEP 2: If still too large after speed-up, chunk it
+    # STEP 2: If file is too large, chunk it
     chunk_paths = [audio_path]
     if file_size_bytes > max_size_bytes:
-        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit after speed-up.")
+        print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit.")
         print(f"  Splitting into chunks...")
         chunk_paths = _chunk_audio_file(audio_path, max_chunk_size_mb=20)
         print(f"  ✓ Split into {len(chunk_paths)} chunks")
@@ -398,13 +400,12 @@ def transcribe_audio(
                 raise RuntimeError(f"Unexpected error during transcription: {str(e)}") from e
 
     
-    # STEP 4: Process all segments and correct timestamps
-    # Multiply all timestamps by SPEED_FACTOR to get original video times
+    # STEP 4: Process all segments (no timestamp correction needed since SPEED_FACTOR = 1.0)
     print(f"Processing {len(all_segments)} total segments...")
     segments = [
         Segment(
-            start=float(seg.get('start', 0) if isinstance(seg, dict) else getattr(seg, 'start', 0)) * SPEED_FACTOR,
-            end=float(seg.get('end', 0) if isinstance(seg, dict) else getattr(seg, 'end', 0)) * SPEED_FACTOR,
+            start=float(seg.get('start', 0) if isinstance(seg, dict) else getattr(seg, 'start', 0)),
+            end=float(seg.get('end', 0) if isinstance(seg, dict) else getattr(seg, 'end', 0)),
             text=(seg.get('text', '') if isinstance(seg, dict) else getattr(seg, 'text', '')).strip()
         )
         for seg in all_segments
@@ -420,6 +421,6 @@ def transcribe_audio(
         segments=segments
     )
     
-    print(f"✓ Transcription complete: {len(segments)} segments (timestamps corrected for 1.25x speed)")
+    print(f"✓ Transcription complete: {len(segments)} segments")
     return transcript
 
