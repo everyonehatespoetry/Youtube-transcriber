@@ -150,45 +150,65 @@ def _speed_up_audio(audio_path: Path, speed_factor: float = 1.25) -> Path:
         return audio_path
 
 
-def _chunk_audio_file(audio_path: Path, max_chunk_size_mb: int = 20) -> list[Path]:
+def _chunk_audio_file(audio_path: Path, max_chunk_duration_minutes: int = 10) -> list[Path]:
     """
-    Split audio file into chunks based on file size.
-    Uses simple byte-based splitting which works for m4a files.
+    Split audio file into time-based chunks using pydub.
+    Creates valid audio files that OpenAI can process.
     
     Args:
         audio_path: Path to audio file
-        max_chunk_size_mb: Maximum size per chunk in MB
+        max_chunk_duration_minutes: Maximum duration per chunk in minutes
         
     Returns:
         List of paths to chunk files
     """
-    file_size = audio_path.stat().st_size
-    max_chunk_bytes = max_chunk_size_mb * 1024 * 1024
-    
-    # Calculate number of chunks needed
-    num_chunks = (file_size + max_chunk_bytes - 1) // max_chunk_bytes
-    
-    if num_chunks == 1:
-        return [audio_path]
-    
-    print(f"  Splitting audio into {num_chunks} chunks...")
-    
-    chunk_paths = []
-    with open(audio_path, 'rb') as f:
+    try:
+        from pydub import AudioSegment
+        
+        print(f"  Loading audio file for chunking...")
+        
+        # Load the entire audio file
+        audio = AudioSegment.from_file(str(audio_path))
+        
+        # Calculate chunk duration in milliseconds
+        chunk_duration_ms = max_chunk_duration_minutes * 60 * 1000
+        total_duration_ms = len(audio)
+        
+        # Calculate number of chunks needed
+        num_chunks = (total_duration_ms + chunk_duration_ms - 1) // chunk_duration_ms
+        
+        if num_chunks == 1:
+            return [audio_path]
+        
+        print(f"  Splitting audio into {num_chunks} chunks ({max_chunk_duration_minutes} min each)...")
+        
+        chunk_paths = []
         for i in range(num_chunks):
-            chunk_data = f.read(max_chunk_bytes)
-            if not chunk_data:
-                break
+            start_ms = i * chunk_duration_ms
+            end_ms = min((i + 1) * chunk_duration_ms, total_duration_ms)
             
+            # Extract chunk
+            chunk = audio[start_ms:end_ms]
+            
+            # Save chunk as valid m4a file
             chunk_path = audio_path.parent / f"{audio_path.stem}_chunk{i+1}.m4a"
-            with open(chunk_path, 'wb') as chunk_file:
-                chunk_file.write(chunk_data)
+            chunk.export(str(chunk_path), format="ipod")  # ipod = m4a format
             
-            chunk_size_mb = len(chunk_data) / (1024 * 1024)
-            print(f"    Chunk {i+1}/{num_chunks}: {chunk_size_mb:.1f} MB")
+            chunk_duration_min = (end_ms - start_ms) / (60 * 1000)
+            chunk_size_mb = chunk_path.stat().st_size / (1024 * 1024)
+            print(f"    Chunk {i+1}/{num_chunks}: {chunk_duration_min:.1f} min, {chunk_size_mb:.1f} MB")
             chunk_paths.append(chunk_path)
-    
-    return chunk_paths
+        
+        return chunk_paths
+        
+    except Exception as e:
+        print(f"  ⚠ Audio chunking failed: {e}")
+        print(f"  This may be due to missing ffmpeg or pydub issues.")
+        raise RuntimeError(
+            f"Failed to chunk audio file: {str(e)}. "
+            f"Make sure ffmpeg is installed on the system."
+        ) from e
+
 
 
 def transcribe_audio(
@@ -250,13 +270,20 @@ def transcribe_audio(
     file_size_mb = file_size_bytes / (1024 * 1024)
     max_size_bytes = 25 * 1024 * 1024  # 25 MB in bytes
     
-    # STEP 2: If file is too large, chunk it
+    # STEP 2: If file is too large, chunk it using pydub
     chunk_paths = [audio_path]
     if file_size_bytes > max_size_bytes:
         print(f"⚠ File size ({file_size_mb:.1f} MB) exceeds OpenAI's 25 MB limit.")
-        print(f"  Splitting into chunks...")
-        chunk_paths = _chunk_audio_file(audio_path, max_chunk_size_mb=20)
-        print(f"  ✓ Split into {len(chunk_paths)} chunks")
+        print(f"  Splitting into chunks using pydub...")
+        try:
+            chunk_paths = _chunk_audio_file(audio_path, max_chunk_duration_minutes=10)
+            print(f"  ✓ Split into {len(chunk_paths)} chunks")
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to chunk audio file: {str(e)}. "
+                f"The audio file is too large ({file_size_mb:.1f} MB) and chunking failed. "
+                f"This may be due to missing ffmpeg on Streamlit Cloud."
+            ) from e
     
     # Get file size for timeout estimation
     # Calculate timeout: base 5 minutes + 1 minute per 10MB

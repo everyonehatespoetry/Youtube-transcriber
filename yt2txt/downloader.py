@@ -102,8 +102,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     ydl_opts = {
         # Download audio in OpenAI-compatible format
-        # Prefer m4a/mp4/webm which are all supported by OpenAI Whisper
-        'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio',
+        # Prefer smaller formats to stay under 25MB limit
+        # Try lowest quality first, then progressively higher quality
+        'format': 'worstaudio[ext=m4a]/worstaudio[ext=mp4]/worstaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio',
         'outtmpl': str(audio_path),  # Include full path with .m4a extension
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
