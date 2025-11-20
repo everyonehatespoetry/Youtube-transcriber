@@ -362,40 +362,41 @@ def transcribe_audio(
                     
             except APIError as e:
                 error_msg = str(e)
-            
-            # Check if it's an HTML response (502/503 gateway errors)
-            is_html_error = "<!DOCTYPE html>" in error_msg or "<html" in error_msg.lower()
-            is_5xx_error = hasattr(e, 'status_code') and e.status_code and 500 <= e.status_code < 600
-            
-            # Retry on 5xx server errors (including 502 Bad Gateway)
-            if (is_html_error or is_5xx_error) and attempt < Config.MAX_RETRIES:
-                last_error = e
-                wait_time = 2 ** attempt
+                
+                # Check if it's an HTML response (502/503 gateway errors)
+                is_html_error = "<!DOCTYPE html>" in error_msg or "<html" in error_msg.lower()
+                is_5xx_error = hasattr(e, 'status_code') and e.status_code and 500 <= e.status_code < 600
+                
+                # Retry on 5xx server errors (including 502 Bad Gateway)
+                if (is_html_error or is_5xx_error) and attempt < Config.MAX_RETRIES:
+                    last_error = e
+                    wait_time = 2 ** attempt
+                    if is_html_error:
+                        print(f"Server error (502 Bad Gateway). Waiting {wait_time} seconds before retry...")
+                    else:
+                        print(f"Server error ({getattr(e, 'status_code', '5xx')}). Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                    continue
+                
+                # Non-retryable API errors
+                if "quota" in error_msg.lower() or "billing" in error_msg.lower():
+                    raise RuntimeError(
+                        f"OpenAI API quota/billing error: {error_msg}. "
+                        f"Please check your OpenAI account."
+                    ) from e
+                
+                # Clean up HTML error messages
                 if is_html_error:
-                    print(f"Server error (502 Bad Gateway). Waiting {wait_time} seconds before retry...")
-                else:
-                    print(f"Server error ({getattr(e, 'status_code', '5xx')}). Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
-                continue
-            
-            # Non-retryable API errors
-            if "quota" in error_msg.lower() or "billing" in error_msg.lower():
-                raise RuntimeError(
-                    f"OpenAI API quota/billing error: {error_msg}. "
-                    f"Please check your OpenAI account."
-                ) from e
-            
-            # Clean up HTML error messages
-            if is_html_error:
-                raise RuntimeError(
-                    "OpenAI API server error (502 Bad Gateway). "
-                    "This is a temporary issue on OpenAI's servers. Please try again in a few minutes."
-                ) from e
-            
-            raise RuntimeError(f"OpenAI API error: {error_msg}") from e
-            
-        except Exception as e:
-            raise RuntimeError(f"Unexpected error during transcription: {str(e)}") from e
+                    raise RuntimeError(
+                        "OpenAI API server error (502 Bad Gateway). "
+                        "This is a temporary issue on OpenAI's servers. Please try again in a few minutes."
+                    ) from e
+                
+                raise RuntimeError(f"OpenAI API error: {error_msg}") from e
+                
+            except Exception as e:
+                raise RuntimeError(f"Unexpected error during transcription: {str(e)}") from e
+
     
     # STEP 4: Process all segments and correct timestamps
     # Multiply all timestamps by SPEED_FACTOR to get original video times
