@@ -101,9 +101,8 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Configure yt-dlp for audio-only m4a download (no ffmpeg required)
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     ydl_opts = {
-        # Configure yt-dlp for audio download
-        # Accept any available format (most permissive)
-        'format': 'bestaudio/best',
+        # Let yt-dlp automatically select the best available format
+        # No format specification - most permissive
         'outtmpl': str(audio_path.with_suffix('')),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
@@ -118,8 +117,6 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         # Try to prevent FixupM4a from running
         'writethumbnail': False,
         'writeautomaticsub': False,
-        # Use android client to bypass bot detection (most reliable method)
-        'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     
     # Add cookies if provided (for bypassing YouTube bot detection)
@@ -138,6 +135,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     elif cookies_path and Path(cookies_path).exists():
         ydl_opts['cookiefile'] = cookies_path
         print(f"Using YouTube cookies from: {cookies_path}")
+    else:
+        # Only use android client if NOT using cookies (can conflict)
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
     
     # Monkey-patch to prevent post-processors from running
     # This is a workaround for yt-dlp trying to run FixupM4a even with empty postprocessors
