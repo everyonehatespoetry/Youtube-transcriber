@@ -103,8 +103,8 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Format selection: prefer smaller files, but ensure m4a format
     ydl_opts = {
         # Configure yt-dlp for audio-only m4a download (no ffmpeg required)
-        # Format selection: prefer m4a format
-        'format': 'bestaudio[ext=m4a]/best[ext=m4a]/best',
+        # Format selection: prefer m4a audio, but accept any audio format
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'outtmpl': str(audio_path.with_suffix('')),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
