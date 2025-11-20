@@ -28,6 +28,7 @@ from yt2txt.writers.txt_writer import write_txt
 from yt2txt.writers.json_writer import write_json
 from yt2txt.writers.srt_writer import write_srt
 from yt2txt.writers.analysis_writer import write_analysis
+from yt2txt.formatter import format_transcript
 from yt2txt.models import Transcript, Segment
 import json
 import re
@@ -125,6 +126,8 @@ if 'transcript' not in st.session_state:
     st.session_state.transcript = None
 if 'analysis_text' not in st.session_state:
     st.session_state.analysis_text = None
+if 'formatted_transcript' not in st.session_state:
+    st.session_state.formatted_transcript = None
 if 'output_dir' not in st.session_state:
     st.session_state.output_dir = None
 if 'chat_messages' not in st.session_state:
@@ -337,7 +340,7 @@ def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata
         raise e
 
 
-def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force: bool = False):
+def process_video_streamlit(url: str, analyze: bool, force: bool = False):
     """Process video with Streamlit progress indicators."""
     try:
         # Validate configuration first
@@ -440,39 +443,6 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
                 write_txt(transcript, output_dir / "transcript_with_timestamps.txt")
                 write_srt(transcript, output_dir / "transcript.srt")
             
-            # Extract slides if requested
-            if extract_slides:
-                with st.spinner("Extracting slides from video..."):
-                    try:
-                        # Import SlideExtractor only when needed (avoids cv2 import issues on Streamlit Cloud)
-                        try:
-                            from yt2txt.slide_extractor import SlideExtractor
-                        except ImportError as e:
-                            st.error(f"Slide extraction is not available: {str(e)}. This feature requires OpenCV which may not be available on this platform.")
-                            return True, output_dir
-                        
-                        video_path, _, _ = download_video(url, force=False)
-                        extractor = SlideExtractor()
-                        slides = extractor.process_video(video_path, output_dir, interval_seconds=1.0)
-                        
-                        if slides:
-                            slides_manifest = [
-                                {
-                                    'timestamp': timestamp,
-                                    'image_path': str(slide_path.relative_to(output_dir)),
-                                    'time_formatted': f"{int(timestamp // 60):02d}:{int(timestamp % 60):02d}"
-                                }
-                                for timestamp, slide_path in slides
-                            ]
-                            manifest_path = output_dir / "slides_manifest.json"
-                            with open(manifest_path, 'w', encoding='utf-8') as f:
-                                json.dump(slides_manifest, f, indent=2)
-                            st.success(f"✓ Extracted {len(slides)} slides")
-                        else:
-                            st.warning("⚠ No slides found in video")
-                    except Exception as e:
-                        st.error(f"⚠ Error extracting slides: {str(e)}")
-            
             # Analyze transcript if requested
             if analyze:
                 analysis_path = output_dir / "equity_analysis.txt"
@@ -491,6 +461,14 @@ def process_video_streamlit(url: str, extract_slides: bool, analyze: bool, force
                             st.success("✓ Analysis complete!")
                         except Exception as e:
                             st.error(f"⚠ Error analyzing transcript: {str(e)}")
+            
+            # Check for cached formatted transcript
+            formatted_path = output_dir / "formatted_transcript.txt"
+            if formatted_path.exists():
+                with open(formatted_path, 'r', encoding='utf-8') as f:
+                    st.session_state.formatted_transcript = f.read()
+            else:
+                st.session_state.formatted_transcript = None
             
             return True, output_dir
             
@@ -530,7 +508,6 @@ def main():
         st.divider()
         
         st.subheader("Options")
-        extract_slides = st.checkbox("Extract slides from video", value=False)
         analyze = st.checkbox("Run equity analysis", value=True)
         
         # Add force reprocess option
@@ -586,6 +563,14 @@ def main():
                                 else:
                                     st.session_state.analysis_text = None
                                 
+                                # Try to load formatted transcript if it exists
+                                formatted_path = transcript_path_obj.parent / "formatted_transcript.txt"
+                                if formatted_path.exists():
+                                    with open(formatted_path, 'r', encoding='utf-8') as f:
+                                        st.session_state.formatted_transcript = f.read()
+                                else:
+                                    st.session_state.formatted_transcript = None
+                                
                                 # Set output dir
                                 st.session_state.output_dir = transcript_path_obj.parent
                                 
@@ -628,7 +613,7 @@ def main():
                 
                 st.session_state.processing = True
                 try:
-                    success, output_dir = process_video_streamlit(url, extract_slides, analyze, force_reprocess)
+                    success, output_dir = process_video_streamlit(url, analyze, force_reprocess)
                     st.session_state.processing = False
                     
                     if success:
@@ -637,7 +622,7 @@ def main():
                         # Show download options
                         st.subheader("📥 Download Files")
                         
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2 = st.columns(2)
                         
                         with col1:
                             with open(output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -649,28 +634,8 @@ def main():
                                     key="download_txt_after_process"
                                 )
                         
-                        with col2:
-                            with open(output_dir / "transcript.json", "r", encoding="utf-8") as f:
-                                st.download_button(
-                                    "📋 Download JSON",
-                                    f.read(),
-                                    file_name="transcript.json",
-                                    mime="application/json",
-                                    key="download_json_after_process"
-                                )
-                        
-                        with col3:
-                            with open(output_dir / "transcript.srt", "r", encoding="utf-8") as f:
-                                st.download_button(
-                                    "🎬 Download SRT",
-                                    f.read(),
-                                    file_name="transcript.srt",
-                                    mime="text/plain",
-                                    key="download_srt_after_process"
-                                )
-                        
                         if st.session_state.analysis_text:
-                            with col4:
+                            with col2:
                                 st.download_button(
                                     "📊 Download Analysis",
                                     st.session_state.analysis_text,
@@ -712,7 +677,7 @@ def main():
             # Show download options
             if st.session_state.output_dir and (st.session_state.output_dir / "transcript_with_timestamps.txt").exists():
                 st.subheader("📥 Download Files")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2 = st.columns(2)
                 
                 with col1:
                     with open(st.session_state.output_dir / "transcript_with_timestamps.txt", "r", encoding="utf-8") as f:
@@ -724,28 +689,8 @@ def main():
                             key="download_txt_current"
                         )
                 
-                with col2:
-                    with open(st.session_state.output_dir / "transcript.json", "r", encoding="utf-8") as f:
-                        st.download_button(
-                            "📋 Download JSON",
-                            f.read(),
-                            file_name="transcript.json",
-                            mime="application/json",
-                            key="download_json_current"
-                        )
-                
-                with col3:
-                    with open(st.session_state.output_dir / "transcript.srt", "r", encoding="utf-8") as f:
-                        st.download_button(
-                            "🎬 Download SRT",
-                            f.read(),
-                            file_name="transcript.srt",
-                            mime="text/plain",
-                            key="download_srt_current"
-                        )
-                
                 if st.session_state.analysis_text:
-                    with col4:
+                    with col2:
                         st.download_button(
                             "📊 Download Analysis",
                             st.session_state.analysis_text,
@@ -783,13 +728,33 @@ def main():
             
             st.divider()
             
-            # Display full transcript with better formatting
-            transcript_text = "\n\n".join(
-                f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
-                for seg in st.session_state.transcript.segments
-            )
+            # Format Transcript Button
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("✨ Format Transcript (Paragraphs)", use_container_width=True, help="Reformat transcript into paragraphs with speaker labels (uses GPT)"):
+                    with st.spinner("Formatting transcript..."):
+                        try:
+                            formatted_text = format_transcript(st.session_state.transcript, st.session_state.output_dir)
+                            st.session_state.formatted_transcript = formatted_text
+                            st.success("✓ Transcript formatted!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error formatting transcript: {e}")
             
-            st.markdown(f'<div class="transcript-text">{transcript_text}</div>', unsafe_allow_html=True)
+            st.divider()
+            
+            # Display formatted transcript if available, otherwise raw segments
+            if st.session_state.formatted_transcript:
+                st.info("✓ Viewing formatted transcript")
+                st.markdown(f'<div class="transcript-text">{st.session_state.formatted_transcript}</div>', unsafe_allow_html=True)
+            else:
+                # Display full transcript with better formatting
+                transcript_text = "\n\n".join(
+                    f"[{int(seg.start // 60):02d}:{int(seg.start % 60):02d}] {seg.text}"
+                    for seg in st.session_state.transcript.segments
+                )
+                
+                st.markdown(f'<div class="transcript-text">{transcript_text}</div>', unsafe_allow_html=True)
     
     # Tab 3: Chat
     with tab3:
