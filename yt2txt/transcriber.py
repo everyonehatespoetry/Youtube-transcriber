@@ -55,17 +55,16 @@ def _chunk_audio_file(audio_path: Path, max_chunk_duration_minutes: int = 10) ->
         for i in range(num_chunks):
             start_time = i * chunk_duration_seconds
             
-            chunk_path = audio_path.parent / f"{audio_path.stem}_chunk{i+1}.m4a"
+            chunk_path = audio_path.parent / f"{audio_path.stem}_chunk{i+1}.mp3"
             
-            # Use ffmpeg to extract and re-encode chunk
-            # Re-encoding ensures valid m4a file with proper headers
+            # Use ffmpeg to extract and re-encode chunk as MP3
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-i', str(audio_path),
                 '-ss', str(start_time),
                 '-t', str(chunk_duration_seconds),
-                '-acodec', 'aac',  # Re-encode to AAC
-                '-b:a', '64k',  # 64kbps bitrate (good quality, small size)
+                '-acodec', 'libmp3lame',  # MP3 codec
+                '-b:a', '64k',  # 64kbps bitrate
                 '-y',  # Overwrite output file
                 str(chunk_path)
             ]

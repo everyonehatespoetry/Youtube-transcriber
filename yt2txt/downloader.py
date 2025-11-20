@@ -88,7 +88,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     output_dir = get_output_dir(video_id, None)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    audio_path = output_dir / "audio.m4a"
+    audio_path = output_dir / "audio.mp3"
     meta_path = output_dir / "meta.json"
     
     # Check cache
@@ -102,10 +102,14 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     ydl_opts = {
         # Download audio in OpenAI-compatible format
-        # Prefer smaller formats to stay under 25MB limit
-        # Try lowest quality first, then progressively higher quality
-        'format': 'worstaudio[ext=m4a]/worstaudio[ext=mp4]/worstaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio',
-        'outtmpl': str(audio_path),  # Include full path with .m4a extension
+        # Prefer MP3 for maximum compatibility
+        'format': 'worstaudio',
+        'outtmpl': str(audio_path.with_suffix('.mp3')),  # Save as MP3
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '64',  # 64kbps for smaller files
+        }],
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
         'extract_flat': False,
