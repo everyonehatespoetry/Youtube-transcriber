@@ -101,8 +101,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Configure yt-dlp for audio-only m4a download (no ffmpeg required)
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     ydl_opts = {
-        # Let yt-dlp automatically select the best available format
-        # No format specification - most permissive
+        # Download audio in OpenAI-compatible format
+        # Prefer m4a/mp4/webm which are all supported by OpenAI Whisper
+        'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio[ext=webm]/bestaudio',
         'outtmpl': str(audio_path.with_suffix('')),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
