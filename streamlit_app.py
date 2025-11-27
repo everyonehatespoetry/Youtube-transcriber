@@ -351,33 +351,52 @@ def process_video_streamlit(url: str, analyze: bool):
         Config.OUT_DIR = persistent_out_dir
         
         try:
-            # Download audio
-            with st.spinner("Downloading audio from YouTube..."):
-                audio_path, metadata, video_id = download_audio(url, force=False)
-                output_dir = audio_path.parent
-                st.session_state.output_dir = output_dir
+            # FIRST: Check for cached transcript BEFORE downloading audio
+            # Extract video_id to search for existing transcripts
+            from yt2txt.downloader import extract_video_id
+            video_id = extract_video_id(url)
             
-            # Check if transcript is already cached before transcribing
-            # Use the same path that transcribe_audio() uses (audio_path.parent)
-            transcript_path = output_dir / "transcript.json"  # output_dir = audio_path.parent
-            transcript_cached = transcript_path.exists()
+            transcript_cached = False
+            transcript_path = None
+            output_dir = None
+            metadata = {}
             
-            # If not found at expected path, search by video_id in case folder name changed
-            if not transcript_cached and persistent_out_dir.exists():
-                # Search for transcript.json files that contain this video_id
+            # Search for existing transcript by video_id
+            if persistent_out_dir.exists():
                 for transcript_file in persistent_out_dir.rglob("transcript.json"):
                     try:
                         with open(transcript_file, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             if data.get('video_id') == video_id:
-                                # Found transcript with matching video_id!
+                                # Found cached transcript!
                                 transcript_path = transcript_file
-                                output_dir = transcript_file.parent  # Update output_dir to match found location
+                                output_dir = transcript_file.parent
                                 st.session_state.output_dir = output_dir
+                                metadata = {
+                                    'url': data.get('url', url),
+                                    'video_id': video_id,
+                                    'title': data.get('title'),
+                                    'channel': data.get('channel'),
+                                    'duration': data.get('duration'),
+                                    'upload_date': data.get('upload_date'),
+                                }
                                 transcript_cached = True
+                                st.info(f"✓ Found cached transcript for this video!")
                                 break
                     except (json.JSONDecodeError, IOError):
                         continue
+            
+            # Only download audio if we don't have a cached transcript
+            if not transcript_cached:
+                # Download audio
+                with st.spinner("Downloading audio from YouTube..."):
+                    audio_path, metadata, video_id = download_audio(url, force=False)
+                    output_dir = audio_path.parent
+                    st.session_state.output_dir = output_dir
+                
+                # Check if transcript exists in the newly downloaded directory
+                transcript_path = output_dir / "transcript.json"
+                transcript_cached = transcript_path.exists()
             
             if transcript_cached:
                 # Load cached transcript (NO API CALL - saves money!)
@@ -410,9 +429,15 @@ def process_video_streamlit(url: str, analyze: bool):
                 # Transcribe (not cached or cache load failed)
                 # transcribe_audio() also checks for cache internally, so it won't re-transcribe if cached
                 # Use progress bar wrapper for better user feedback
-                transcript = transcribe_with_progress(audio_path, video_id, url, metadata, force=False)
-                st.session_state.transcript = transcript
-                st.success("✓ Transcript ready")
+                # Note: audio_path is only available if we downloaded (not cached)
+                if 'audio_path' in locals():
+                    transcript = transcribe_with_progress(audio_path, video_id, url, metadata, force=False)
+                    st.session_state.transcript = transcript
+                    st.success("✓ Transcript ready")
+                else:
+                    # This shouldn't happen, but handle gracefully
+                    st.error("Error: No audio path available for transcription")
+                    return False, None
             
             # Write transcript files
             with st.spinner("Saving transcript files..."):
