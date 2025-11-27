@@ -131,6 +131,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     project_root = Path(__file__).parent.parent.resolve()
     default_cookies_path = project_root / "youtube_cookies.txt"
     
+    # Track if we're using cookies
+    using_cookies = False
+    temp_cookies_file = None
+    
     if cookies_content:
         # Write cookies content to temporary file
         # This is the recommended way for Replit: create a secret named "YOUTUBE_COOKIES_CONTENT"
@@ -143,9 +147,11 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             temp_cookies.write(cookies_content)
             temp_cookies.flush()
             temp_cookies.close()
-            ydl_opts['cookiefile'] = temp_cookies.name
+            temp_cookies_file = temp_cookies.name
+            ydl_opts['cookiefile'] = temp_cookies_file
+            using_cookies = True
             # Verify file was created and has content
-            if Path(temp_cookies.name).exists() and Path(temp_cookies.name).stat().st_size > 0:
+            if Path(temp_cookies_file).exists() and Path(temp_cookies_file).stat().st_size > 0:
                 print(f"✓ Using YouTube cookies from YOUTUBE_COOKIES_CONTENT environment variable (Replit secret)")
             else:
                 print(f"⚠ Warning: Cookies file was created but appears empty")
@@ -153,26 +159,42 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             print(f"⚠ Warning: YOUTUBE_COOKIES_CONTENT is set but empty")
     elif cookies_path and Path(cookies_path).exists():
         ydl_opts['cookiefile'] = cookies_path
+        using_cookies = True
         print(f"Using YouTube cookies from: {cookies_path}")
     elif default_cookies_path.exists():
         ydl_opts['cookiefile'] = str(default_cookies_path)
+        using_cookies = True
         print(f"Using YouTube cookies from: {default_cookies_path}")
-    else:
-        # Only use android client if NOT using cookies (can conflict)
-        print("No cookies file found - using Android client (may be less reliable)")
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
     
     # Add additional options to bypass bot detection
+    # Use iOS client which is often more reliable than web/android
+    if using_cookies:
+        # With cookies, try ios client first (most reliable), then web, then android
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['ios', 'web', 'android']}}
+    else:
+        # Without cookies, use android client
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+        print("No cookies file found - using Android client (may be less reliable)")
+    
+    # Comprehensive headers to mimic real browser
     ydl_opts.update({
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
         'referer': 'https://www.youtube.com/',
         'http_headers': {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         },
+        # Additional bypass options
+        'sleep_requests': 1,  # Sleep 1 second between requests
+        'sleep_interval': 0,  # No sleep between fragments
+        'max_sleep_interval': 5,  # Max sleep if rate limited
     })
     
     metadata = {}
@@ -202,156 +224,188 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     
     ydl_opts['progress_hooks'] = [progress_hook]
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Also disable post-processors on the instance
-            ydl._postprocessors = []
-            print("Downloading audio...")
-            
-            # Monitor for file creation during download
-            downloaded_file_path = None
-            
-            try:
-                info = ydl.extract_info(url, download=True)
-            except Exception as download_error:
-                # Even if post-processing fails, the file might be downloaded
-                error_str = str(download_error)
-                
-                if "Postprocessing" in error_str or "postprocess" in error_str.lower() or "FixupM4a" in error_str:
-                    # Post-processing error is expected - we handle it silently
-                    # Try to extract info without downloading again
-                    try:
-                        info = ydl.extract_info(url, download=False)
-                    except:
-                        # If that fails, we'll try to find the downloaded file anyway
-                        info = {}
-                    # Check if file exists despite error
-                    potential_file = output_dir / video_id
-                    if potential_file.exists():
-                        downloaded_file_path = potential_file
+    # Try downloading with fallback options if 403 error occurs
+    download_attempts = [
+        ydl_opts,  # First attempt with current options
+    ]
+    
+    # If we get 403, try with different player clients
+    if using_cookies:
+        # Try web client as fallback
+        fallback_opts = ydl_opts.copy()
+        fallback_opts['extractor_args'] = {'youtube': {'player_client': ['web', 'ios', 'android']}}
+        download_attempts.append(fallback_opts)
+        
+        # Try android client as last resort
+        fallback_opts2 = ydl_opts.copy()
+        fallback_opts2['extractor_args'] = {'youtube': {'player_client': ['android']}}
+        download_attempts.append(fallback_opts2)
+    
+    info = None
+    download_success = False
+    last_error = None
+    
+    for attempt_num, attempt_opts in enumerate(download_attempts, 1):
+        try:
+            with yt_dlp.YoutubeDL(attempt_opts) as ydl:
+                # Disable post-processors on the instance
+                ydl._postprocessors = []
+                if attempt_num > 1:
+                    print(f"Retrying download (attempt {attempt_num}/{len(download_attempts)}) with different client...")
                 else:
-                    # Re-raise if it's a different error
-                    raise
-            
-            # Extract metadata and get title for folder renaming
-            metadata = {
-                'url': url,
-                'video_id': video_id,
-                'title': info.get('title') if info else None,
-                'channel': (info.get('uploader') or info.get('channel')) if info else None,
-                'duration': info.get('duration') if info else None,
-                'upload_date': info.get('upload_date') if info else None,
-            }
-            
-            # Rename folder to include title if we have it
-            if metadata.get('title'):
-                new_output_dir = get_output_dir(video_id, metadata['title'])
-                if new_output_dir != output_dir and not new_output_dir.exists():
-                    try:
-                        output_dir.rename(new_output_dir)
-                        output_dir = new_output_dir
-                        # Update paths
-                        audio_path = output_dir / "audio.m4a"
-                        meta_path = output_dir / "meta.json"
-                    except Exception:
-                        # If rename fails, continue with original directory
-                        pass
-            
-            # Ensure audio file has correct extension
-            # yt-dlp downloads without extension, so we need to find and rename it
-            downloaded_file = downloaded_file_path  # Use file found during error handling if available
-            
-            # Also check the file saved via progress hook
-            if not downloaded_file and saved_file_path and saved_file_path.exists():
-                downloaded_file = saved_file_path
-            
-            if not downloaded_file:
-                # Check for file without extension (yt-dlp default behavior)
-                potential_file = output_dir / video_id
-                if potential_file.exists():
-                    downloaded_file = potential_file
-                else:
-                    # Look for any audio file in the directory
-                    audio_files = list(output_dir.glob("*.m4a")) + list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.webm")) + list(output_dir.glob("*.m4v"))
-                    if audio_files:
-                        downloaded_file = audio_files[0]
-                    else:
-                        # Last resort: find any file that's not meta.json
-                        all_files = [f for f in output_dir.iterdir() if f.is_file() and f.name != 'meta.json'] if output_dir.exists() else []
-                        if all_files:
-                            downloaded_file = all_files[0]
-            
-            if downloaded_file and downloaded_file != audio_path:
-                # Make sure the target directory exists
-                audio_path.parent.mkdir(parents=True, exist_ok=True)
+                    print("Downloading audio...")
                 
-                # Detect actual file extension
-                actual_extension = downloaded_file.suffix if downloaded_file.suffix else ''
+                # Monitor for file creation during download
+                downloaded_file_path = None
                 
-                # If no extension, try to detect from file content
-                if not actual_extension:
-                    import mimetypes
-                    mime_type, _ = mimetypes.guess_type(str(downloaded_file))
-                    if mime_type:
-                        ext_map = {
-                            'audio/mp4': '.m4a',
-                            'video/mp4': '.mp4',
-                            'audio/webm': '.webm',
-                            'video/webm': '.webm',
-                        }
-                        actual_extension = ext_map.get(mime_type, '.m4a')
-                    else:
-                        actual_extension = '.m4a'  # Default fallback
-                
-                # Ensure extension is OpenAI-compatible
-                if actual_extension not in ['.m4a', '.mp4', '.webm', '.mp3', '.wav', '.flac', '.ogg']:
-                    actual_extension = '.m4a'  # Force to m4a if unsupported
-                
-                final_audio_path = audio_path.parent / f"audio{actual_extension}"
-                
-                downloaded_file.rename(final_audio_path)
-                audio_path = final_audio_path  # Update audio_path to reflect actual file
-                print(f"✓ Audio file saved as: {audio_path.name}")
-            elif not audio_path.exists():
-                # Check if file exists with different extension
-                for ext in ['.m4a', '.mp4', '.webm', '.mp3']:
-                    potential_path = audio_path.parent / f"audio{ext}"
-                    if potential_path.exists():
-                        audio_path = potential_path
-                        print(f"✓ Found audio file: {audio_path.name}")
-                        break
-                else:
-                    # If we still don't have the file, that's a real problem
-                    raise RuntimeError("Audio file was not downloaded successfully")
-            
-            # Save metadata
-            with open(meta_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
-            
-            print(f"✓ Audio downloaded: {audio_path}")
-            
-    except Exception as e:
-        # Check if file exists despite the error
-        if audio_path.exists():
-            # File was saved successfully, just need metadata
-            if not metadata.get('title'):
                 try:
-                    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'extract_flat': False}) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        metadata = {
-                            'url': url,
-                            'video_id': video_id,
-                            'title': info.get('title'),
-                            'channel': info.get('uploader') or info.get('channel'),
-                            'duration': info.get('duration'),
-                            'upload_date': info.get('upload_date'),
-                        }
-                        with open(meta_path, 'w', encoding='utf-8') as f:
-                            json.dump(metadata, f, indent=2, ensure_ascii=False)
-                except:
-                    pass
+                    info = ydl.extract_info(url, download=True)
+                    download_success = True
+                    break  # Success! Exit retry loop
+                except Exception as download_error:
+                    # Even if post-processing fails, the file might be downloaded
+                    error_str = str(download_error)
+                    
+                    if "Postprocessing" in error_str or "postprocess" in error_str.lower() or "FixupM4a" in error_str:
+                        # Post-processing error is expected - we handle it silently
+                        # Try to extract info without downloading again
+                        try:
+                            info = ydl.extract_info(url, download=False)
+                            download_success = True
+                            break  # Success! Exit retry loop
+                        except:
+                            # If that fails, we'll try to find the downloaded file anyway
+                            info = {}
+                        # Check if file exists despite error
+                        potential_file = output_dir / video_id
+                        if potential_file.exists():
+                            downloaded_file_path = potential_file
+                            download_success = True
+                            break  # Success! Exit retry loop
+                    elif "403" in error_str or "Forbidden" in error_str:
+                        # 403 error - try next attempt
+                        last_error = download_error
+                        print(f"⚠ Got 403 error on attempt {attempt_num}, trying fallback...")
+                        if attempt_num < len(download_attempts):
+                            continue  # Try next attempt
+                        else:
+                            raise  # No more attempts, raise the error
+                    else:
+                        # Other error - raise immediately
+                        raise
+        except Exception as e:
+            last_error = e
+            if attempt_num < len(download_attempts) and ("403" in str(e) or "Forbidden" in str(e)):
+                continue  # Try next attempt for 403 errors
+            else:
+                raise  # Re-raise if not 403 or last attempt
+    
+    if not download_success:
+        raise RuntimeError(f"Failed to download after {len(download_attempts)} attempts: {str(last_error)}")
+    
+    # Extract metadata and get title for folder renaming
+    metadata = {
+        'url': url,
+        'video_id': video_id,
+        'title': info.get('title') if info else None,
+        'channel': (info.get('uploader') or info.get('channel')) if info else None,
+        'duration': info.get('duration') if info else None,
+        'upload_date': info.get('upload_date') if info else None,
+    }
+    
+    # Rename folder to include title if we have it
+    if metadata.get('title'):
+        new_output_dir = get_output_dir(video_id, metadata['title'])
+        if new_output_dir != output_dir and not new_output_dir.exists():
+            try:
+                output_dir.rename(new_output_dir)
+                output_dir = new_output_dir
+                # Update paths
+                audio_path = output_dir / "audio.m4a"
+                meta_path = output_dir / "meta.json"
+            except Exception:
+                # If rename fails, continue with original directory
+                pass
+    
+    # Ensure audio file has correct extension
+    # yt-dlp downloads without extension, so we need to find and rename it
+    downloaded_file = None  # Will be set from saved_file_path or found files
+    
+    # Also check the file saved via progress hook
+    if not downloaded_file and saved_file_path and saved_file_path.exists():
+        downloaded_file = saved_file_path
+    
+    if not downloaded_file:
+        # Check for file without extension (yt-dlp default behavior)
+        potential_file = output_dir / video_id
+        if potential_file.exists():
+            downloaded_file = potential_file
         else:
-            raise RuntimeError(f"Failed to download audio: {str(e)}") from e
+            # Look for any audio file in the directory
+            audio_files = list(output_dir.glob("*.m4a")) + list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.webm")) + list(output_dir.glob("*.m4v"))
+            if audio_files:
+                downloaded_file = audio_files[0]
+            else:
+                # Last resort: find any file that's not meta.json
+                all_files = [f for f in output_dir.iterdir() if f.is_file() and f.name != 'meta.json'] if output_dir.exists() else []
+                if all_files:
+                    downloaded_file = all_files[0]
+    
+    if downloaded_file and downloaded_file != audio_path:
+        # Make sure the target directory exists
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Detect actual file extension
+        actual_extension = downloaded_file.suffix if downloaded_file.suffix else ''
+        
+        # If no extension, try to detect from file content
+        if not actual_extension:
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(str(downloaded_file))
+            if mime_type:
+                ext_map = {
+                    'audio/mp4': '.m4a',
+                    'video/mp4': '.mp4',
+                    'audio/webm': '.webm',
+                    'video/webm': '.webm',
+                }
+                actual_extension = ext_map.get(mime_type, '.m4a')
+            else:
+                actual_extension = '.m4a'  # Default fallback
+        
+        # Ensure extension is OpenAI-compatible
+        if actual_extension not in ['.m4a', '.mp4', '.webm', '.mp3', '.wav', '.flac', '.ogg']:
+            actual_extension = '.m4a'  # Force to m4a if unsupported
+        
+        final_audio_path = audio_path.parent / f"audio{actual_extension}"
+        
+        downloaded_file.rename(final_audio_path)
+        audio_path = final_audio_path  # Update audio_path to reflect actual file
+        print(f"✓ Audio file saved as: {audio_path.name}")
+    elif not audio_path.exists():
+        # Check if file exists with different extension
+        for ext in ['.m4a', '.mp4', '.webm', '.mp3']:
+            potential_path = audio_path.parent / f"audio{ext}"
+            if potential_path.exists():
+                audio_path = potential_path
+                print(f"✓ Found audio file: {audio_path.name}")
+                break
+        else:
+            # If we still don't have the file, that's a real problem
+            raise RuntimeError("Audio file was not downloaded successfully")
+    
+    # Save metadata
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    
+    print(f"✓ Audio downloaded: {audio_path}")
+    
+    # Clean up temp cookies file if we created one
+    if temp_cookies_file and Path(temp_cookies_file).exists():
+        try:
+            os.unlink(temp_cookies_file)
+        except:
+            pass  # Ignore cleanup errors
     
     return audio_path, metadata, video_id
 
