@@ -194,6 +194,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Only add what's necessary to avoid conflicts
     ydl_opts['referer'] = 'https://www.youtube.com/'
     
+    # Add delays between requests to avoid rate limiting
+    ydl_opts['sleep_interval'] = 1  # Sleep 1 second between requests
+    ydl_opts['sleep_requests'] = 1  # Sleep 1 second between different requests
+    
     metadata = {}
     
     # Track downloaded file via progress hook and immediately save it
@@ -239,7 +243,12 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                 
                 # If we get 403 or player response error and have cookies, try different clients
                 if ("player response" in error_str.lower() or "403" in error_str or "Forbidden" in error_str) and using_cookies:
-                    print(f"⚠ Got 403/player response error with web client, trying iOS client...")
+                    import time
+                    print(f"⚠ Got 403/player response error with web client")
+                    print(f"   Error details: {error_str[:300]}")
+                    print(f"   Waiting 2 seconds before trying iOS client...")
+                    time.sleep(2)  # Brief delay to avoid rate limiting
+                    
                     # Try iOS client (often more reliable with cookies)
                     fallback_opts = ydl_opts.copy()
                     fallback_opts['extractor_args'] = {'youtube': {'player_client': 'ios'}}
@@ -251,7 +260,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                             print("✓ iOS client succeeded!")
                     except Exception as ios_error:
                         ios_error_str = str(ios_error)
-                        print(f"⚠ iOS client also failed: {ios_error_str[:200]}")
+                        print(f"⚠ iOS client also failed: {ios_error_str[:300]}")
+                        print(f"   Waiting 2 seconds before trying Android client...")
+                        time.sleep(2)  # Brief delay
                         
                         # Try android client as last resort
                         print(f"⚠ Trying Android client as last resort...")
@@ -264,10 +275,37 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                                 download_success = True
                                 print("✓ Android client succeeded!")
                         except Exception as android_error:
-                            # If all fail, provide helpful error message
-                            error_msg = f"All player clients failed. Web: {error_str[:100]}, iOS: {ios_error_str[:100]}, Android: {str(android_error)[:100]}"
-                            print(f"✗ {error_msg}")
-                            raise RuntimeError(f"Failed with all clients. Your cookies may be expired. Please export fresh cookies from your browser and update YOUTUBE_COOKIES_CONTENT secret.") from download_error
+                            # If all fail, provide detailed error message
+                            android_error_str = str(android_error)[:300]
+                            print(f"✗ All player clients failed:")
+                            print(f"   Web client: {error_str[:200]}")
+                            print(f"   iOS client: {ios_error_str[:200]}")
+                            print(f"   Android client: {android_error_str[:200]}")
+                            
+                            # Determine if this is likely IP blocking vs cookie issue
+                            all_errors = error_str + ios_error_str + android_error_str
+                            is_ip_block = "403" in all_errors or "Forbidden" in all_errors
+                            
+                            if is_ip_block:
+                                raise RuntimeError(
+                                    f"All download methods failed with 403/Forbidden errors.\n\n"
+                                    f"This is likely because YouTube is blocking requests from Streamlit Cloud's IP addresses, "
+                                    f"not because your cookies are expired (you just updated them).\n\n"
+                                    f"Your cookies are probably fine - the issue is YouTube's anti-bot measures blocking cloud hosting IPs.\n\n"
+                                    f"Possible solutions:\n"
+                                    f"1. Wait a few minutes and try again (rate limiting)\n"
+                                    f"2. Try a different video URL\n"
+                                    f"3. Run the app locally where it works\n"
+                                    f"4. Consider using YouTube Data API for transcripts (if available)\n"
+                                ) from download_error
+                            else:
+                                raise RuntimeError(
+                                    f"All download methods failed. Error details:\n"
+                                    f"Web: {error_str[:150]}\n"
+                                    f"iOS: {ios_error_str[:150]}\n"
+                                    f"Android: {android_error_str[:150]}\n\n"
+                                    f"If you just updated cookies, this might be temporary. Try again in a few minutes."
+                                ) from download_error
                 else:
                     # For other errors, raise immediately
                     raise
