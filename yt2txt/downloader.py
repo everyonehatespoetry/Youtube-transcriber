@@ -99,18 +99,16 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         return audio_path, metadata, video_id
     
     # Configure yt-dlp for audio-only download
-    # Prefer smaller formats to avoid OpenAI's 25 MB limit
+    # Keep it simple - let yt-dlp use its defaults which are most reliable
     ydl_opts = {
-        # Download best audio format available (will be converted if needed)
+        # Download best audio format - simple format string that yt-dlp handles well
         'format': 'bestaudio/best',
         'outtmpl': str(audio_path.with_suffix('.%(ext)s')),  # Preserve original extension
-        'quiet': True,  # Suppress yt-dlp output
-        'no_warnings': False,  # Keep warnings but they'll be quieter
+        'quiet': True,  # Suppress output unless debugging
+        'no_warnings': False,
         'extract_flat': False,
         'keepvideo': False,
         'noplaylist': True,
-        # Prefer formats that don't need conversion
-        'prefer_free_formats': True,
         'writethumbnail': False,
         'writeautomaticsub': False,
         # Retry options for better reliability
@@ -166,36 +164,17 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         using_cookies = True
         print(f"Using YouTube cookies from: {default_cookies_path}")
     
-    # Add additional options to bypass bot detection
-    # Use iOS client which is often more reliable than web/android
-    if using_cookies:
-        # With cookies, try ios client first (most reliable), then web, then android
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['ios', 'web', 'android']}}
-    else:
-        # Without cookies, use android client
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
-        print("No cookies file found - using Android client (may be less reliable)")
+    # Only add player_client as fallback if cookies aren't working
+    # Don't set it initially - let yt-dlp use its default (web client with cookies)
+    # The player_client should only be used one at a time, not as a list
+    if not using_cookies:
+        # Without cookies, use android client as it's more reliable for unauthenticated requests
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': 'android'}}
+        print("No cookies file found - using Android client")
     
-    # Comprehensive headers to mimic real browser
-    ydl_opts.update({
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'referer': 'https://www.youtube.com/',
-        'http_headers': {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0',
-        },
-        # Additional bypass options
-        'sleep_requests': 1,  # Sleep 1 second between requests
-        'sleep_interval': 0,  # No sleep between fragments
-        'max_sleep_interval': 5,  # Max sleep if rate limited
-    })
+    # Minimal headers - yt-dlp handles most of this automatically
+    # Only add what's necessary to avoid conflicts
+    ydl_opts['referer'] = 'https://www.youtube.com/'
     
     metadata = {}
     
@@ -224,84 +203,53 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     
     ydl_opts['progress_hooks'] = [progress_hook]
     
-    # Try downloading with fallback options if 403 error occurs
-    download_attempts = [
-        ydl_opts,  # First attempt with current options
-    ]
-    
-    # If we get 403, try with different player clients
-    if using_cookies:
-        # Try web client as fallback
-        fallback_opts = ydl_opts.copy()
-        fallback_opts['extractor_args'] = {'youtube': {'player_client': ['web', 'ios', 'android']}}
-        download_attempts.append(fallback_opts)
-        
-        # Try android client as last resort
-        fallback_opts2 = ydl_opts.copy()
-        fallback_opts2['extractor_args'] = {'youtube': {'player_client': ['android']}}
-        download_attempts.append(fallback_opts2)
-    
+    # Simple download - let yt-dlp handle retries and fallbacks
+    # Only add fallback player clients if we get specific errors
     info = None
     download_success = False
     last_error = None
     
-    for attempt_num, attempt_opts in enumerate(download_attempts, 1):
-        try:
-            with yt_dlp.YoutubeDL(attempt_opts) as ydl:
-                # Disable post-processors on the instance
-                ydl._postprocessors = []
-                if attempt_num > 1:
-                    print(f"Retrying download (attempt {attempt_num}/{len(download_attempts)}) with different client...")
-                else:
-                    print("Downloading audio...")
+    # First attempt: use default yt-dlp behavior (works best with cookies)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print("Downloading audio...")
+            try:
+                info = ydl.extract_info(url, download=True)
+                download_success = True
+            except Exception as download_error:
+                error_str = str(download_error)
                 
-                # Monitor for file creation during download
-                downloaded_file_path = None
-                
-                try:
-                    info = ydl.extract_info(url, download=True)
-                    download_success = True
-                    break  # Success! Exit retry loop
-                except Exception as download_error:
-                    # Even if post-processing fails, the file might be downloaded
-                    error_str = str(download_error)
+                # If we get player response error and have cookies, try different clients
+                if ("player response" in error_str.lower() or "403" in error_str or "Forbidden" in error_str) and using_cookies:
+                    print(f"⚠ Got error with default client, trying iOS client...")
+                    # Try iOS client (most reliable with cookies)
+                    fallback_opts = ydl_opts.copy()
+                    fallback_opts['extractor_args'] = {'youtube': {'player_client': 'ios'}}
                     
-                    if "Postprocessing" in error_str or "postprocess" in error_str.lower() or "FixupM4a" in error_str:
-                        # Post-processing error is expected - we handle it silently
-                        # Try to extract info without downloading again
+                    try:
+                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_fallback:
+                            info = ydl_fallback.extract_info(url, download=True)
+                            download_success = True
+                    except Exception as ios_error:
+                        print(f"⚠ iOS client failed, trying web client...")
+                        # Try web client
+                        fallback_opts2 = ydl_opts.copy()
+                        fallback_opts2['extractor_args'] = {'youtube': {'player_client': 'web'}}
+                        
                         try:
-                            info = ydl.extract_info(url, download=False)
-                            download_success = True
-                            break  # Success! Exit retry loop
-                        except:
-                            # If that fails, we'll try to find the downloaded file anyway
-                            info = {}
-                        # Check if file exists despite error
-                        potential_file = output_dir / video_id
-                        if potential_file.exists():
-                            downloaded_file_path = potential_file
-                            download_success = True
-                            break  # Success! Exit retry loop
-                    elif "403" in error_str or "Forbidden" in error_str:
-                        # 403 error - try next attempt
-                        last_error = download_error
-                        print(f"⚠ Got 403 error on attempt {attempt_num}, trying fallback...")
-                        if attempt_num < len(download_attempts):
-                            continue  # Try next attempt
-                        else:
-                            raise  # No more attempts, raise the error
-                    else:
-                        # Other error - raise immediately
-                        raise
-        except Exception as e:
-            last_error = e
-            if attempt_num < len(download_attempts) and ("403" in str(e) or "Forbidden" in str(e)):
-                continue  # Try next attempt for 403 errors
-            else:
-                raise  # Re-raise if not 403 or last attempt
-    
-    if not download_success:
-        raise RuntimeError(f"Failed to download after {len(download_attempts)} attempts: {str(last_error)}")
+                            with yt_dlp.YoutubeDL(fallback_opts2) as ydl_web:
+                                info = ydl_web.extract_info(url, download=True)
+                                download_success = True
+                        except Exception:
+                            # If all fail, raise the original error
+                            raise download_error
+                else:
+                    # For other errors, raise immediately
+                    raise
+    except Exception as e:
+        last_error = e
+        if not download_success:
+            raise RuntimeError(f"Failed to download audio: {str(e)}") from e
     
     # Extract metadata and get title for folder renaming
     metadata = {
