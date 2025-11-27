@@ -1,12 +1,21 @@
+[server]
+# Disable CORS to avoid the warning (safe for local use)
+enableCORS = false
+# Disable XSRF protection to allow CORS=false (safe for local use)
+enableXsrfProtection = false
+
+[browser]
+# Disable usage statistics collection
+gatherUsageStats = false
+# Automatically open browser when server starts
+serverAddress = "localhost"
+serverPort = 8501
+
 [theme]
-primaryColor = "#FF4B4B"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
+# Use light theme (white background)
+base = "light"
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
 textColor = "#262730"
 font = "sans serif"
-
-[server]
-headless = true
-enableCORS = false
-enableXsrfProtection = true
-

@@ -49,18 +49,32 @@ def load_streamlit_secrets():
     try:
         if not hasattr(st, 'secrets'):
             return
-        if not st.secrets:
+        
+        # Try to access secrets - this will raise StreamlitSecretNotFoundError if no secrets file
+        # For local use, secrets are optional (we use .env file instead)
+        try:
+            # Check if secrets exist by trying to get length
+            # This will raise StreamlitSecretNotFoundError if secrets.toml doesn't exist
+            _ = len(st.secrets)
+            secrets_dict = dict(st.secrets)
+        except Exception:
+            # No secrets file found - that's fine for local use, use .env instead
+            # This catches StreamlitSecretNotFoundError and any other exceptions
             return
-        if 'OPENAI_API_KEY' in st.secrets:
-            Config.OPENAI_API_KEY = st.secrets['OPENAI_API_KEY']
-        if 'MODEL' in st.secrets:
-            Config.MODEL = st.secrets['MODEL']
-        if 'ANALYSIS_MODEL' in st.secrets:
-            Config.ANALYSIS_MODEL = st.secrets['ANALYSIS_MODEL']
-        if 'OUT_DIR' in st.secrets:
-            Config.OUT_DIR = Path(st.secrets['OUT_DIR']).resolve()
-        if 'MAX_RETRIES' in st.secrets:
-            Config.MAX_RETRIES = int(st.secrets['MAX_RETRIES'])
+        
+        if not secrets_dict:
+            return
+            
+        if 'OPENAI_API_KEY' in secrets_dict:
+            Config.OPENAI_API_KEY = secrets_dict['OPENAI_API_KEY']
+        if 'MODEL' in secrets_dict:
+            Config.MODEL = secrets_dict['MODEL']
+        if 'ANALYSIS_MODEL' in secrets_dict:
+            Config.ANALYSIS_MODEL = secrets_dict['ANALYSIS_MODEL']
+        if 'OUT_DIR' in secrets_dict:
+            Config.OUT_DIR = Path(secrets_dict['OUT_DIR']).resolve()
+        if 'MAX_RETRIES' in secrets_dict:
+            Config.MAX_RETRIES = int(secrets_dict['MAX_RETRIES'])
     except (AttributeError, TypeError, KeyError, ValueError):
         # Silently fail - will use .env file values
         pass
@@ -163,7 +177,6 @@ def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata
     total_time_estimate = upload_time_estimate + processing_time_estimate
     
     # Create progress bar and status container
-    # Note: Since Streamlit blocks during API calls, we show initial status and completion
     progress_bar = st.progress(0)
     status_container = st.empty()
     
@@ -177,32 +190,80 @@ def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata
     
     *This may take a few minutes for large files. Please wait...*
     """)
-    progress_bar.progress(0.1)  # Show we've started (10%)
+    progress_bar.progress(0.05)  # Show we've started (5%)
     
     start_time = time.time()
+    result = None
+    error_occurred = None
     
-    try:
-        # Call transcribe_audio - this will block, so UI won't update during
-        result = transcribe_audio(audio_path, video_id, url, metadata, force=force)
-        
-        # Update to show completion
+    # Run transcription in a thread so we can update progress
+    def run_transcription():
+        nonlocal result, error_occurred
+        try:
+            result = transcribe_audio(audio_path, video_id, url, metadata, force=force)
+        except Exception as e:
+            error_occurred = e
+    
+    # Start transcription in background thread
+    transcription_thread = threading.Thread(target=run_transcription)
+    transcription_thread.start()
+    
+    # Update progress bar while transcription is running
+    # Start at 5%, end at 95% (leave 5% for completion)
+    min_progress = 0.05
+    max_progress = 0.95
+    
+    while transcription_thread.is_alive():
         elapsed = time.time() - start_time
-        progress_bar.progress(1.0)
+        
+        # Calculate progress based on elapsed time vs estimated time
+        # Use a logarithmic curve so it moves faster at the start, slower near the end
+        if total_time_estimate > 0:
+            time_ratio = min(elapsed / total_time_estimate, 0.95)  # Cap at 95%
+            # Use a smooth curve (ease-out)
+            progress = min_progress + (max_progress - min_progress) * (1 - (1 - time_ratio) ** 2)
+        else:
+            # Fallback: linear progress if we can't estimate
+            progress = min_progress + (max_progress - min_progress) * min(elapsed / 60, 0.95)
+        
+        progress_bar.progress(progress)
+        
+        # Update status with elapsed time
         status_container.markdown(f"""
-        **✓ Transcription Complete!**
+        **📤 Uploading & Processing Audio**
         
-        - ⏱️ Actual time: **{int(elapsed)}s**  
-        - 📊 Estimated time: **~{int(total_time_estimate)}s**
-        - ✅ Status: **Success**
+        - 📁 File size: **{file_size_mb:.1f} MB**  
+        - ⏱️ Audio duration: **{int(audio_duration)}s**  
+        - ⏱️ Elapsed time: **{int(elapsed)}s** / ~{int(total_time_estimate)}s
+        - 📊 Progress: **{int(progress * 100)}%**
+        
+        *This may take a few minutes for large files. Please wait...*
         """)
-        time.sleep(1.5)  # Show completion message briefly
         
-        return result
-    except Exception as e:
-        # Show error
+        time.sleep(0.5)  # Update every 0.5 seconds
+    
+    # Wait for thread to complete
+    transcription_thread.join()
+    
+    # Check for errors
+    if error_occurred:
         progress_bar.progress(0)
-        status_container.error(f"❌ **Error during transcription:** {str(e)}")
-        raise e
+        status_container.error(f"❌ **Error during transcription:** {str(error_occurred)}")
+        raise error_occurred
+    
+    # Show completion
+    elapsed = time.time() - start_time
+    progress_bar.progress(1.0)
+    status_container.markdown(f"""
+    **✓ Transcription Complete!**
+    
+    - ⏱️ Actual time: **{int(elapsed)}s**  
+    - 📊 Estimated time: **~{int(total_time_estimate)}s**
+    - ✅ Status: **Success**
+    """)
+    time.sleep(1.5)  # Show completion message briefly
+    
+    return result
 
 
 def fix_number_formatting(text: str) -> str:
@@ -273,71 +334,6 @@ def fix_number_formatting(text: str) -> str:
         return text
     
     return ''.join(parts)
-
-
-def transcribe_with_progress(audio_path: Path, video_id: str, url: str, metadata: dict, force: bool = False):
-    """
-    Transcribe audio with a progress bar showing estimated progress.
-    Since OpenAI API doesn't provide real-time progress, we estimate based on:
-    - File upload time (estimated from file size)
-    - Processing time (estimated from audio duration)
-    """
-    from yt2txt.transcriber import transcribe_audio
-    
-    # Get file size and duration for estimation
-    file_size_mb = audio_path.stat().st_size / (1024 * 1024)
-    audio_duration = metadata.get('duration', 0)  # in seconds
-    
-    # Estimate times (conservative estimates)
-    # Upload: assume ~0.5 MB/s (conservative for large files)
-    upload_time_estimate = max(10, file_size_mb / 0.5)  # at least 10 seconds
-    
-    # Processing: assume ~0.5x real-time (conservative - API is usually faster)
-    processing_time_estimate = max(30, audio_duration * 0.5)  # at least 30 seconds
-    
-    total_time_estimate = upload_time_estimate + processing_time_estimate
-    
-    # Create progress bar and status container
-    # Note: Since Streamlit blocks during API calls, we show initial status and completion
-    progress_bar = st.progress(0)
-    status_container = st.empty()
-    
-    # Show initial status with estimates
-    status_container.markdown(f"""
-    **📤 Uploading & Processing Audio**
-    
-    - 📁 File size: **{file_size_mb:.1f} MB**  
-    - ⏱️ Audio duration: **{int(audio_duration)}s**  
-    - ⏳ Estimated time: **~{int(total_time_estimate)}s**
-    
-    *This may take a few minutes for large files. Please wait...*
-    """)
-    progress_bar.progress(0.1)  # Show we've started (10%)
-    
-    start_time = time.time()
-    
-    try:
-        # Call transcribe_audio - this will block, so UI won't update during
-        result = transcribe_audio(audio_path, video_id, url, metadata, force=force)
-        
-        # Update to show completion
-        elapsed = time.time() - start_time
-        progress_bar.progress(1.0)
-        status_container.markdown(f"""
-        **✓ Transcription Complete!**
-        
-        - ⏱️ Actual time: **{int(elapsed)}s**  
-        - 📊 Estimated time: **~{int(total_time_estimate)}s**
-        - ✅ Status: **Success**
-        """)
-        time.sleep(1.5)  # Show completion message briefly
-        
-        return result
-    except Exception as e:
-        # Show error
-        progress_bar.progress(0)
-        status_container.error(f"❌ **Error during transcription:** {str(e)}")
-        raise e
 
 
 def process_video_streamlit(url: str, analyze: bool):

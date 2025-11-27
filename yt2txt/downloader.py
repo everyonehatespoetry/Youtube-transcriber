@@ -5,7 +5,7 @@ import re
 import json
 import shutil
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 import yt_dlp
 from yt2txt.config import Config
 
@@ -287,6 +287,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                             is_ip_block = "403" in all_errors or "Forbidden" in all_errors
                             
                             if is_ip_block:
+                                # All download methods failed - this is IP blocking from Streamlit Cloud
                                 raise RuntimeError(
                                     f"All download methods failed with 403/Forbidden errors.\n\n"
                                     f"This is likely because YouTube is blocking requests from Streamlit Cloud's IP addresses, "
@@ -295,8 +296,8 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                                     f"Possible solutions:\n"
                                     f"1. Wait a few minutes and try again (rate limiting)\n"
                                     f"2. Try a different video URL\n"
-                                    f"3. Run the app locally where it works\n"
-                                    f"4. Consider using YouTube Data API for transcripts (if available)\n"
+                                    f"3. Run the app locally where it works (your local IP isn't blocked)\n"
+                                    f"4. Consider self-hosting on a VPS with a residential IP\n"
                                 ) from download_error
                             else:
                                 raise RuntimeError(
