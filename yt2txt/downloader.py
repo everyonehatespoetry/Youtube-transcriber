@@ -148,7 +148,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     
     if cookies_content:
         # Write cookies content to temporary file
-        # This is the recommended way for Replit: create a secret named "YOUTUBE_COOKIES_CONTENT"
+        # This is the recommended way for Streamlit Cloud: create a secret named "YOUTUBE_COOKIES_CONTENT"
         # and paste the entire contents of your cookies.txt file
         import tempfile
         # Strip whitespace and ensure proper formatting
@@ -162,8 +162,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             ydl_opts['cookiefile'] = temp_cookies_file
             using_cookies = True
             # Verify file was created and has content
-            if Path(temp_cookies_file).exists() and Path(temp_cookies_file).stat().st_size > 0:
-                print(f"✓ Using YouTube cookies from YOUTUBE_COOKIES_CONTENT environment variable (Replit secret)")
+            cookie_file_size = Path(temp_cookies_file).stat().st_size if Path(temp_cookies_file).exists() else 0
+            cookie_lines = len([line for line in cookies_content.split('\n') if line.strip() and not line.strip().startswith('#')])
+            if cookie_file_size > 0:
+                print(f"✓ Using YouTube cookies from YOUTUBE_COOKIES_CONTENT (file size: {cookie_file_size} bytes, {cookie_lines} cookie entries)")
             else:
                 print(f"⚠ Warning: Cookies file was created but appears empty")
         else:
@@ -177,10 +179,13 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         using_cookies = True
         print(f"Using YouTube cookies from: {default_cookies_path}")
     
-    # Only add player_client as fallback if cookies aren't working
-    # Don't set it initially - let yt-dlp use its default (web client with cookies)
-    # The player_client should only be used one at a time, not as a list
-    if not using_cookies:
+    # With cookies, explicitly use web client first (most reliable with cookies)
+    # If that fails, we'll try ios client as fallback
+    if using_cookies:
+        # Web client works best with cookies
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': 'web'}}
+        print("Using web client with cookies")
+    else:
         # Without cookies, use android client as it's more reliable for unauthenticated requests
         ydl_opts['extractor_args'] = {'youtube': {'player_client': 'android'}}
         print("No cookies file found - using Android client")
@@ -232,10 +237,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             except Exception as download_error:
                 error_str = str(download_error)
                 
-                # If we get player response error and have cookies, try different clients
+                # If we get 403 or player response error and have cookies, try different clients
                 if ("player response" in error_str.lower() or "403" in error_str or "Forbidden" in error_str) and using_cookies:
-                    print(f"⚠ Got error with default client, trying iOS client...")
-                    # Try iOS client (most reliable with cookies)
+                    print(f"⚠ Got 403/player response error with web client, trying iOS client...")
+                    # Try iOS client (often more reliable with cookies)
                     fallback_opts = ydl_opts.copy()
                     fallback_opts['extractor_args'] = {'youtube': {'player_client': 'ios'}}
                     
@@ -243,19 +248,26 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
                         with yt_dlp.YoutubeDL(fallback_opts) as ydl_fallback:
                             info = ydl_fallback.extract_info(url, download=True)
                             download_success = True
+                            print("✓ iOS client succeeded!")
                     except Exception as ios_error:
-                        print(f"⚠ iOS client failed, trying web client...")
-                        # Try web client
+                        ios_error_str = str(ios_error)
+                        print(f"⚠ iOS client also failed: {ios_error_str[:200]}")
+                        
+                        # Try android client as last resort
+                        print(f"⚠ Trying Android client as last resort...")
                         fallback_opts2 = ydl_opts.copy()
-                        fallback_opts2['extractor_args'] = {'youtube': {'player_client': 'web'}}
+                        fallback_opts2['extractor_args'] = {'youtube': {'player_client': 'android'}}
                         
                         try:
-                            with yt_dlp.YoutubeDL(fallback_opts2) as ydl_web:
-                                info = ydl_web.extract_info(url, download=True)
+                            with yt_dlp.YoutubeDL(fallback_opts2) as ydl_android:
+                                info = ydl_android.extract_info(url, download=True)
                                 download_success = True
-                        except Exception:
-                            # If all fail, raise the original error
-                            raise download_error
+                                print("✓ Android client succeeded!")
+                        except Exception as android_error:
+                            # If all fail, provide helpful error message
+                            error_msg = f"All player clients failed. Web: {error_str[:100]}, iOS: {ios_error_str[:100]}, Android: {str(android_error)[:100]}"
+                            print(f"✗ {error_msg}")
+                            raise RuntimeError(f"Failed with all clients. Your cookies may be expired. Please export fresh cookies from your browser and update YOUTUBE_COOKIES_CONTENT secret.") from download_error
                 else:
                     # For other errors, raise immediately
                     raise
