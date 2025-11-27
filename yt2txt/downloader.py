@@ -98,39 +98,35 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
             metadata = json.load(f)
         return audio_path, metadata, video_id
     
-    # Configure yt-dlp for audio-only m4a download (no ffmpeg required)
+    # Configure yt-dlp for audio-only download
     # Prefer smaller formats to avoid OpenAI's 25 MB limit
     ydl_opts = {
-        # Download audio in OpenAI-compatible format
-        # Prefer MP3 for maximum compatibility
-        'format': 'worstaudio',
-        'outtmpl': str(audio_path.with_suffix('.mp3')),  # Save as MP3
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '64',  # 64kbps for smaller files
-        }],
+        # Download best audio format available (will be converted if needed)
+        'format': 'bestaudio/best',
+        'outtmpl': str(audio_path.with_suffix('.%(ext)s')),  # Preserve original extension
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': False,  # Keep warnings but they'll be quieter
         'extract_flat': False,
-        'postprocessors': [],  # No postprocessors - download as-is
-        'nopostoverwrites': True,
-        'postprocessor_args': {},
         'keepvideo': False,
         'noplaylist': True,
         # Prefer formats that don't need conversion
         'prefer_free_formats': True,
-        # Disable automatic post-processor selection
-        'prefer_insecure': False,
-        # Try to prevent FixupM4a from running
         'writethumbnail': False,
         'writeautomaticsub': False,
+        # Retry options for better reliability
+        'retries': 10,
+        'fragment_retries': 10,
+        'file_access_retries': 3,
     }
     
     # Add cookies if provided (for bypassing YouTube bot detection)
     # Support both file path and direct content from environment
     cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT", "")
     cookies_path = Config.YOUTUBE_COOKIES_TXT
+    
+    # Also check for cookies file in project root
+    project_root = Path(__file__).parent.parent.resolve()
+    default_cookies_path = project_root / "youtube_cookies.txt"
     
     if cookies_content:
         # Write cookies content to temporary file
@@ -143,9 +139,25 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     elif cookies_path and Path(cookies_path).exists():
         ydl_opts['cookiefile'] = cookies_path
         print(f"Using YouTube cookies from: {cookies_path}")
+    elif default_cookies_path.exists():
+        ydl_opts['cookiefile'] = str(default_cookies_path)
+        print(f"Using YouTube cookies from: {default_cookies_path}")
     else:
         # Only use android client if NOT using cookies (can conflict)
         ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+    
+    # Add additional options to bypass bot detection
+    ydl_opts.update({
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'referer': 'https://www.youtube.com/',
+        'http_headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+            'Connection': 'keep-alive',
+        },
+    })
     
     metadata = {}
     
