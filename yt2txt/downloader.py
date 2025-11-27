@@ -120,7 +120,10 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     }
     
     # Add cookies if provided (for bypassing YouTube bot detection)
-    # Support both file path and direct content from environment
+    # Priority order:
+    # 1. YOUTUBE_COOKIES_CONTENT env var (for Replit Secrets - paste entire cookies.txt content)
+    # 2. YOUTUBE_COOKIES_TXT env var (file path)
+    # 3. youtube_cookies.txt in project root
     cookies_content = os.getenv("YOUTUBE_COOKIES_CONTENT", "")
     cookies_path = Config.YOUTUBE_COOKIES_TXT
     
@@ -130,12 +133,24 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     
     if cookies_content:
         # Write cookies content to temporary file
+        # This is the recommended way for Replit: create a secret named "YOUTUBE_COOKIES_CONTENT"
+        # and paste the entire contents of your cookies.txt file
         import tempfile
-        temp_cookies = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-        temp_cookies.write(cookies_content)
-        temp_cookies.close()
-        ydl_opts['cookiefile'] = temp_cookies.name
-        print(f"Using YouTube cookies from environment variable")
+        # Strip whitespace and ensure proper formatting
+        cookies_content = cookies_content.strip()
+        if cookies_content:
+            temp_cookies = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+            temp_cookies.write(cookies_content)
+            temp_cookies.flush()
+            temp_cookies.close()
+            ydl_opts['cookiefile'] = temp_cookies.name
+            # Verify file was created and has content
+            if Path(temp_cookies.name).exists() and Path(temp_cookies.name).stat().st_size > 0:
+                print(f"✓ Using YouTube cookies from YOUTUBE_COOKIES_CONTENT environment variable (Replit secret)")
+            else:
+                print(f"⚠ Warning: Cookies file was created but appears empty")
+        else:
+            print(f"⚠ Warning: YOUTUBE_COOKIES_CONTENT is set but empty")
     elif cookies_path and Path(cookies_path).exists():
         ydl_opts['cookiefile'] = cookies_path
         print(f"Using YouTube cookies from: {cookies_path}")
@@ -144,6 +159,7 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
         print(f"Using YouTube cookies from: {default_cookies_path}")
     else:
         # Only use android client if NOT using cookies (can conflict)
+        print("No cookies file found - using Android client (may be less reliable)")
         ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
     
     # Add additional options to bypass bot detection
