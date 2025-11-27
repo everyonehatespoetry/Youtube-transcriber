@@ -9,6 +9,16 @@ from typing import Dict, Optional, Tuple
 import yt_dlp
 from yt2txt.config import Config
 
+# Check yt-dlp version for debugging
+try:
+    import yt_dlp.version
+    YT_DLP_VERSION = yt_dlp.version.__version__
+except:
+    try:
+        YT_DLP_VERSION = yt_dlp.__version__
+    except:
+        YT_DLP_VERSION = "unknown"
+
 
 def extract_video_id(url: str) -> str:
     """Extract video ID from various YouTube URL formats."""
@@ -132,6 +142,9 @@ def download_audio(url: str, force: bool = False) -> Tuple[Path, Dict, str]:
     # Track if we're using cookies
     using_cookies = False
     temp_cookies_file = None
+    
+    # Log yt-dlp version for debugging
+    print(f"Using yt-dlp version: {YT_DLP_VERSION}")
     
     if cookies_content:
         # Write cookies content to temporary file
